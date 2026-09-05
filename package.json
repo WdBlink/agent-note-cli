@@ -1,0 +1,56 @@
+{
+  "name": "agent-note-cli",
+  "version": "0.1.0",
+  "description": "Turn local AI coding sessions into a clear daily work brief.",
+  "type": "module",
+  "bin": {
+    "agent-note": "src/cli.mjs",
+    "an": "src/cli.mjs"
+  },
+  "files": [
+    "src/",
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "backend/provenance.json"
+  ],
+  "engines": {
+    "node": ">=22.16"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --import tsx --test test/*.test.mjs backend/upstream/tests/*.test.ts",
+    "check": "npm run build && npm run typecheck && node --check src/cli.mjs && node --check src/service.mjs && node --check src/presentation.mjs && npm test",
+    "prepack": "npm run build",
+    "start": "node src/cli.mjs",
+    "typecheck": "tsc --noEmit",
+    "release:pack": "node scripts/release.mjs",
+    "test:release": "node --test test/package.test.mjs"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WdBlink/agent-note-cli.git"
+  },
+  "dependencies": {
+    "@langchain/core": "1.2.9",
+    "@langchain/langgraph": "1.4.13",
+    "@langchain/langgraph-checkpoint": "1.1.5",
+    "js-yaml": "4.3.2",
+    "zod": "4.5.2"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "4.0.9",
+    "@types/node": "26.1.0",
+    "esbuild": "0.28.1",
+    "tsx": "4.22.5",
+    "typescript": "6.0.3"
+  },
+  "bundleDependencies": [
+    "@langchain/core",
+    "@langchain/langgraph",
+    "@langchain/langgraph-checkpoint",
+    "js-yaml",
+    "zod"
+  ]
+}
