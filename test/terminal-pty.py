@@ -131,6 +131,11 @@ process.stdin.on('end', async () => {{
         app.expect('/    工作线 / 来源')
         app.send('\r')
         app.expect('PTY 原文：核验导航、滚动和取消。')
+        app.send('o')
+        app.expect('/    直达会话 / 未打开')
+        app.expect('没有经过来源校验的主会话 ID')
+        app.back('来源')
+        app.expect('PTY 原文：核验导航、滚动和取消。')
         app.back('工作线 / 来源')
         app.back('工作线 / 深读')
         app.back('工作线')
@@ -188,4 +193,4 @@ process.stdin.on('end', async () => {{
     invalid = subprocess.run([shutil.which('node'), str(repo / 'src/cli.mjs'), 'ui', '--color', 'invalid'], capture_output=True, text=True)
     assert invalid.returncode == 1 and '--color 必须' in invalid.stderr
 
-print('PTY acceptance passed: generation, dossier, frozen source, back navigation, invalid date, cancellation, resize, Ctrl-C and terminal restoration.')
+print('PTY acceptance passed: generation, dossier, frozen source, guarded session jump, back navigation, invalid date, cancellation, resize, Ctrl-C and terminal restoration.')

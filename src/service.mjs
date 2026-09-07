@@ -94,11 +94,29 @@ export async function brief(options, dependencies = {}) {
   }
 }
 
-export async function readSource(view, sourceId) {
+export function sourceSession(view, sourceId) {
   const evidence = view.index?.evidence.find(e => e.evidenceId === sourceId);
-  const session = view.sessions.find(s => evidence
+  const matches = view.sessions.filter(s => evidence
     ? s.path === evidence.sourcePath && s.platform === evidence.provider && (!evidence.sessionId || s.id === evidence.sessionId)
     : `${s.platform}:${s.id}:${s.path}` === sourceId);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function conversationSession(view, session) {
+  if (!session || session.lineage?.origin !== 'subagent') return session;
+  // Build each provider's families separately: providers can reuse a session ID.
+  return structuredTodaySessionFamilies(view.sessions.filter(s => s.platform === session.platform))
+    .find(family => family.members.includes(session))?.root;
+}
+
+export function worklineSessions(view, workline) {
+  const sessions = workline.evidenceIds.map(id => conversationSession(view, sourceSession(view, id))).filter(Boolean);
+  return [...new Set(sessions)];
+}
+
+export async function readSource(view, sourceId) {
+  const evidence = view.index?.evidence.find(e => e.evidenceId === sourceId);
+  const session = sourceSession(view, sourceId);
   const end = evidence && /^bytes 0-([1-9]\d*)$/.exec(evidence.range)?.[1];
   const capture = evidence && end ? {
     canonicalPath: evidence.sourcePath, sha256: evidence.contentHash, byteLength: Number(end),
