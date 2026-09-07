@@ -65,7 +65,7 @@ export async function runStructuredTodayIndexPreparation(input: {
   const artifactId = structuredTodayIndexArtifactId(input.logicalDate);
   const editorialContract = await loadStructuredTodayEditorialContract();
   const digestFamilies = structuredTodaySessionFamilies(input.snapshot.sessions.flatMap((session) =>
-    session.platform === "codex" || session.platform === "claude" ? [session] : []
+    session.platform === "codex" || session.platform === "claude" || session.platform === "cursor" ? [session] : []
   ));
   const plan = freezeStructuredTodayProviderPlan(
     input.settings,
@@ -109,7 +109,9 @@ export async function runStructuredTodayIndexPreparation(input: {
     const cached = input.runtimeStore.getDigest(key);
     if (cached) return cached;
     const result = await digest(request);
-    input.runtimeStore.saveDigest(key, result);
+    // The workflow rejects a digest that renames its own Session. Caching one would make
+    // a single bad response permanent for this Session and model, with no way to retry.
+    if (result.output.sessionId === request.expectedSessionId) input.runtimeStore.saveDigest(key, result);
     return result;
   };
   const startedAt = input.runtimeStore.getRun(workflowRunId)?.startedAt ?? new Date().toISOString();

@@ -5,7 +5,7 @@ const NonEmptyString = z.string().trim().min(1);
 const LogicalDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const Timestamp = z.iso.datetime({ offset: true });
 const Sha256 = z.string().regex(/^[a-f0-9]{64}$/);
-const Provider = z.enum(["codex", "claude"]);
+const Provider = z.enum(["codex", "claude", "cursor"]);
 
 export const STRUCTURED_TODAY_INDEX_SCHEMA = "today-workline-index/v1" as const;
 export const STRUCTURED_TODAY_DOSSIER_SCHEMA = "today-workline-dossier/v1" as const;

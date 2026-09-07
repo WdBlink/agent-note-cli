@@ -6,7 +6,7 @@ import { structuredTranscriptEvidence } from "../../src/session-family";
 
 export interface StructuredTodayEvidenceTarget {
   title: string;
-  platform: "codex" | "claude";
+  platform: "codex" | "claude" | "cursor";
   request: SessionTranscriptRequest;
   citation?: {
     label: string;
@@ -19,7 +19,7 @@ export interface StructuredTodayCitationTarget {
   evidenceId: string;
   label: string;
   aliases: string[];
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "cursor";
   title: string;
   target: StructuredTodayEvidenceTarget;
 }
@@ -130,7 +130,7 @@ function CitationButton({
   displayLabel: string;
   onOpen: ((target: StructuredTodayEvidenceTarget, returnFocus: HTMLElement) => void) | undefined;
 }): ReactElement {
-  const providerLabel = target.provider === "codex" ? "Codex" : "Claude Code";
+  const providerLabel = target.provider === "codex" ? "Codex" : target.provider === "claude" ? "Claude Code" : "Cursor";
   return (
     <button
       type="button"

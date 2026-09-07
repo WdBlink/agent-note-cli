@@ -17,11 +17,13 @@ const help = `Agent Note CLI · 与 Agent Notebook 相同的 Today 后端
   --date YYYY-MM-DD                   日期，默认今天
   --timezone IANA                     时区，默认系统时区
   --project PATH                      只查看该项目及子目录
-  --source all|codex|claude            会话来源，默认 all
-  --root PATH                        扫描目录，可重复；目录名需含 codex 或 claude
+  --source all|codex|claude|cursor     会话来源，默认 all
+  --compiler codex|claude|cursor      整理用的模型 CLI，默认跟随来源
+  --root PATH                        扫描目录，可重复；目录名需含 codex、claude 或 cursor
   --settings FILE                    App 格式的 settings JSON
   --codex-model NAME                  覆盖 Codex 模型
   --claude-model NAME                 覆盖 Claude 模型
+  --cursor-model NAME                 覆盖 Cursor 模型
   --data-dir PATH                    CLI 数据目录
   --format text|markdown|json         输出格式
   --help / --version                  帮助 / 版本
@@ -34,9 +36,9 @@ const expand = value => path.resolve(value === '~' ? os.homedir() : value.starts
 
 async function main() {
   const { values: v, positionals } = parseArgs({ allowPositionals: true, options: {
-    date: { type: 'string' }, timezone: { type: 'string' }, project: { type: 'string' }, source: { type: 'string' },
+    date: { type: 'string' }, timezone: { type: 'string' }, project: { type: 'string' }, source: { type: 'string' }, compiler: { type: 'string' },
     root: { type: 'string', multiple: true }, settings: { type: 'string' }, 'data-dir': { type: 'string' },
-    'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
+    'codex-model': { type: 'string' }, 'claude-model': { type: 'string' }, 'cursor-model': { type: 'string' },
     format: { type: 'string', default: 'text' }, workline: { type: 'string' },
     'read-only': { type: 'boolean' }, refresh: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' }
@@ -45,7 +47,8 @@ async function main() {
   if (v.version) return void process.stdout.write(JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url))).version + '\n');
   if (positionals.length > 1 || (positionals[0] && !['brief', 'ui'].includes(positionals[0]))) throw new Error('未知命令。请运行 agent-note --help。');
   if (!['text', 'markdown', 'json'].includes(v.format)) throw new Error('--format 必须为 text、markdown 或 json。');
-  if (v.source && !['all', 'codex', 'claude'].includes(v.source)) throw new Error('--source 必须为 all、codex 或 claude。');
+  if (v.source && !['all', 'codex', 'claude', 'cursor'].includes(v.source)) throw new Error('--source 必须为 all、codex、claude 或 cursor。');
+  if (v.compiler && !['codex', 'claude', 'cursor'].includes(v.compiler)) throw new Error('--compiler 必须为 codex、claude 或 cursor。');
   if (v['read-only'] && v.refresh) throw new Error('--read-only 与 --refresh 不能同时使用。');
   if (v.timezone) {
     new Intl.DateTimeFormat('en', { timeZone: v.timezone }).format();
@@ -56,6 +59,7 @@ async function main() {
   if (process.argv.length === 2 && !interactive) return void process.stdout.write(help);
   if (v['codex-model']) process.env.AGENT_NOTEBOOK_TODAY_CODEX_MODEL = v['codex-model'];
   if (v['claude-model']) process.env.AGENT_NOTEBOOK_TODAY_CLAUDE_MODEL = v['claude-model'];
+  if (v['cursor-model']) process.env.AGENT_NOTEBOOK_TODAY_CURSOR_MODEL = v['cursor-model'];
   let settings;
   if (v.settings) {
     const document = JSON.parse(await fs.readFile(expand(v.settings), 'utf8'));
@@ -64,7 +68,7 @@ async function main() {
   }
   const { brief } = await import('./service.mjs');
   const options = {
-    date: v.date, project: v.project ? expand(v.project) : undefined, source: v.source,
+    date: v.date, project: v.project ? expand(v.project) : undefined, source: v.source, compiler: v.compiler,
     roots: v.root?.map(expand), settings, dataDir: v['data-dir'] ? expand(v['data-dir']) : undefined,
     readOnly: v['read-only'], refresh: v.refresh, workline: v.workline,
     onProgress(progress) {

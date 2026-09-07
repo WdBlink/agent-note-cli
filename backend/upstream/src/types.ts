@@ -4,7 +4,8 @@ export type TaskCategory = "research" | "build" | "write" | "analysis" | "admin"
 
 export type SessionSummaryMode = "native" | "metadata";
 
-export type SessionProvider = "codex" | "claude";
+export type SessionProvider = "codex" | "claude" | "cursor";
+export type CompilerProvider = "codex" | "claude" | "cursor";
 
 export type AgentPlatform = SessionProvider | "minimax" | "other";
 
@@ -19,6 +20,7 @@ export interface CockpitSettings {
   runtimeNodePath: string;
   codexCliPath: string;
   claudeCliPath: string;
+  cursorCliPath: string;
   dailyReviewScheduleEnabled: boolean;
   dailyReviewScheduleTime: string;
 }
@@ -86,7 +88,7 @@ export interface AgentWorkSession {
   branch?: string;
   resumeHint?: string;
   resumable?: boolean;
-  summarySource?: "codex" | "claude" | "metadata";
+  summarySource?: "codex" | "claude" | "cursor" | "metadata";
   artifacts: string[];
   status: AgentSessionStatus;
   transcriptCapture?: AgentTranscriptCapture;

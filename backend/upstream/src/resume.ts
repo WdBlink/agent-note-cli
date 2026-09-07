@@ -16,6 +16,7 @@ function platformResumeCommand(session: AgentWorkSession): string | undefined {
   if (!id) return undefined;
   if (session.platform === "codex") return `codex resume ${shellArgument(id)}`;
   if (session.platform === "claude") return `claude --resume ${shellArgument(id)}`;
+  if (session.platform === "cursor") return `agent --resume ${shellArgument(id)}`;
   return undefined;
 }
 

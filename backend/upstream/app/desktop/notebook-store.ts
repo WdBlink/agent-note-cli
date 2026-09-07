@@ -696,7 +696,7 @@ function normalizeWorkRecord(value: unknown): DailyWorkRecord | undefined {
     const id = cleanText(session.id, 2_000);
     const path = cleanText(session.path, 4_000);
     const title = cleanText(session.title, 300);
-    const platform = ["codex", "claude", "minimax", "other"].includes(session.platform) ? session.platform : "other";
+    const platform = ["codex", "claude", "cursor", "minimax", "other"].includes(session.platform) ? session.platform : "other";
     return id && path && title ? { id, path, title, platform } : undefined;
   }).filter((session): session is DailyWorkRecord["sessions"][number] => Boolean(session));
   if (sessions.length === 0) return undefined;
@@ -721,7 +721,7 @@ function normalizeBookmark(value: unknown): DailyContinuationBookmark | undefine
   const sessionPath = cleanText(raw.sessionPath, 4_000);
   const title = cleanText(raw.title, 300);
   if (!id || !sessionId || !sessionPath || !title) return undefined;
-  const provider = ["codex", "claude", "minimax", "other"].includes(raw.provider ?? "") ? raw.provider! : "other";
+  const provider = ["codex", "claude", "cursor", "minimax", "other"].includes(raw.provider ?? "") ? raw.provider! : "other";
   return {
     id,
     title,
@@ -772,5 +772,5 @@ function cleanTimestamp(value: unknown): string { const date = new Date(typeof v
 function isDate(value: unknown): value is string { return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value); }
 function localDate(date = new Date()): string { const offset = date.getTimezoneOffset() * 60_000; return new Date(date.getTime() - offset).toISOString().slice(0, 10); }
 function basename(value: string): string { return value.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || value; }
-function platformLabel(platform: string): string { return platform === "codex" ? "Codex" : platform === "claude" ? "Claude Code" : platform; }
+function platformLabel(platform: string): string { return platform === "codex" ? "Codex" : platform === "claude" ? "Claude Code" : platform === "cursor" ? "Cursor" : platform; }
 function stableHash(value: string): string { let hash = 2166136261; for (let index = 0; index < value.length; index += 1) { hash ^= value.charCodeAt(index); hash = Math.imul(hash, 16777619); } return (hash >>> 0).toString(36); }

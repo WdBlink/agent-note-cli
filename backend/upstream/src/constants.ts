@@ -13,7 +13,8 @@ export const COMMAND_OPEN_AGENT_WHITEBOARD = "open-agent-whiteboard";
 export const DEFAULT_SESSION_SCAN_ROOTS = [
   "~/.codex/sessions",
   "~/.codex/archived_sessions",
-  "~/.claude/projects"
+  "~/.claude/projects",
+  "~/.cursor/projects"
 ];
 
 export const SESSION_PROVIDER_DEFINITIONS: ReadonlyArray<{
@@ -22,7 +23,8 @@ export const SESSION_PROVIDER_DEFINITIONS: ReadonlyArray<{
   description: string;
 }> = [
   { id: "codex", label: "Codex", description: "读取 ~/.codex 下的本机会话记录" },
-  { id: "claude", label: "Claude Code", description: "读取 ~/.claude/projects 下的本机会话记录" }
+  { id: "claude", label: "Claude Code", description: "读取 ~/.claude/projects 下的本机会话记录" },
+  { id: "cursor", label: "Cursor", description: "读取 ~/.cursor/projects 下的本机 Agent transcript，并用 Cursor Agent CLI 整理" }
 ];
 
 export const DEFAULT_SESSION_PROVIDERS: SessionProvider[] = SESSION_PROVIDER_DEFINITIONS.map(({ id }) => id);
@@ -49,6 +51,7 @@ export const DEFAULT_SETTINGS: CockpitSettings = {
   runtimeNodePath: "node",
   codexCliPath: "codex",
   claudeCliPath: "claude",
+  cursorCliPath: "agent",
   dailyReviewScheduleEnabled: false,
   dailyReviewScheduleTime: "18:30"
 };

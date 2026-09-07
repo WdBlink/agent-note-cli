@@ -6,7 +6,7 @@ export const STRUCTURED_TODAY_ADMISSION_POLICY_VERSION = "structured-today-admis
 
 const NonEmptyString = z.string().trim().min(1);
 const Sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
-const Provider = z.enum(["codex", "claude"]);
+const Provider = z.enum(["codex", "claude", "cursor"]);
 const Role = z.enum(["user", "assistant"]);
 export const EvidenceAuthorKindSchema = z.enum(["human", "agent", "automation", "host-notification", "unknown"]);
 const MessageKey = z.string().regex(/^msg-v2-[a-f0-9]{64}$/u);
@@ -187,7 +187,7 @@ export interface EvidenceJsonlParseIssueV1 {
 }
 
 export interface EvidenceJsonlParseResultV1 {
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "cursor";
   sessionId: string;
   evidenceId: string;
   parserVersion: string;
@@ -199,7 +199,7 @@ export interface EvidenceJsonlParseResultV1 {
 
 export interface ParseEvidenceJsonlInputV1 {
   source: Uint8Array;
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "cursor";
   sessionId: string;
   evidenceId: string;
   frozenPrefixByteLength?: number;
@@ -218,7 +218,7 @@ export interface EvidenceSourceRecordV1 {
 
 export interface ParseEvidenceRecordsInputV1 {
   records: readonly EvidenceSourceRecordV1[];
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "cursor";
   sessionId: string;
   evidenceId: string;
   frozenSourcePrefix: { byteLength: number; contentHash: string };
@@ -562,7 +562,7 @@ function addEvidenceRelationIssues(
 }
 
 function projectProviderMessage(
-  provider: "codex" | "claude",
+  provider: "codex" | "claude" | "cursor",
   record: Record<string, unknown>
 ): {
   role: "user" | "assistant";
@@ -602,7 +602,7 @@ function projectProviderMessage(
     return undefined;
   }
   const nested = asRecord(record.message);
-  const role = providerRole(nested?.role ?? record.type);
+  const role = providerRole(nested?.role ?? record.role ?? record.type);
   const content = projectText(nested?.content ?? record.content);
   if (!role || !content) return undefined;
   const providerMessageId = optionalString(record.uuid);

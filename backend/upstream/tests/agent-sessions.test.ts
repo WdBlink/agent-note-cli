@@ -626,7 +626,7 @@ test("provider selection supports both, either provider, and neither", async () 
     await utimes(codexFile, targetTime, targetTime);
     await utimes(claudeFile, targetTime, targetTime);
 
-    const scan = (providers: Array<"codex" | "claude">) => loadAgentWorkSnapshot(createEmptyData().settings, {
+    const scan = (providers: Array<"codex" | "claude" | "cursor">) => loadAgentWorkSnapshot(createEmptyData().settings, {
       now: new Date("2026-07-03T12:00:00.000Z"),
       roots,
       providers,
@@ -675,5 +675,147 @@ test("historical date discovery precedes newer files and exposes discovery trunc
     assert.ok(snapshot.warnings.some((warning) => warning.includes("发现范围不完整")));
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("extracts Cursor transcripts from user_query tags, tool paths and subagent folders", () => {
+  const sessionId = "2c0aa10b-d54b-461b-b06c-2a09f67d3192";
+  const content = [
+    JSON.stringify({
+      role: "user",
+      message: {
+        content: [{
+          type: "text",
+          text: "<timestamp>Monday, Sep 7, 2026, 11:38 AM (UTC+8)</timestamp>\n<user_query>\n看看这个仓库在干什么\n</user_query>"
+        }]
+      }
+    }),
+    JSON.stringify({
+      role: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "先从 README 摸清项目在做什么。" },
+          { type: "tool_use", name: "Read", input: { path: "/workspace/agent-note-cli/README.md" } }
+        ]
+      }
+    }),
+    JSON.stringify({ type: "turn_ended", status: "success" })
+  ].join("\n");
+  const session = extractWorkSessionFromText(
+    content,
+    `/tmp/.cursor/projects/workspace-agent-note-cli/agent-transcripts/${sessionId}/${sessionId}.jsonl`,
+    "cursor",
+    "2026-09-07T04:00:00.000Z"
+  );
+  assert.equal(session?.id, sessionId);
+  assert.equal(session?.resumable, true);
+  assert.equal(session?.resumeHint, `agent --resume ${sessionId}`);
+  assert.equal(session?.title, "看看这个仓库在干什么");
+  assert.equal(session?.summary, "先从 README 摸清项目在做什么。");
+  assert.equal(session?.projectPath, "/workspace/agent-note-cli");
+  assert.equal(session?.lineage?.origin, "primary");
+  assert.equal(session?.startedAt, "2026-09-07T03:38:00.000Z");
+
+  const childId = "e6ae6dc6-fcb3-43cb-a33c-165b4c933886";
+  const child = extractWorkSessionFromText(
+    JSON.stringify({
+      role: "user",
+      message: { content: [{ type: "text", text: "<user_query>\nThe beginning of the above subagent result is truncated.\n</user_query>" }] }
+    }),
+    `/tmp/.cursor/projects/workspace/agent-transcripts/${sessionId}/subagents/${childId}.jsonl`,
+    "cursor",
+    "2026-09-07T04:10:00.000Z"
+  );
+  assert.deepEqual(child?.lineage, {
+    origin: "subagent",
+    parentSessionId: sessionId,
+    agentRole: "worker"
+  });
+  assert.equal(child?.id, childId);
+  assert.equal(child?.resumable, false);
+  assert.equal(child?.resumeHint, undefined);
+});
+
+// Cursor Agent CLI persists a chat for every compile call, keyed by the throwaway
+// workspace it ran in. Those transcripts contain this tool's own prompts.
+test("Cursor transcripts written by our own compiler workspaces never become evidence", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "agent-notebook-cursor-scratch-"));
+  const projects = path.join(temp, "cursor", "projects");
+  const real = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const scratch = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+  const transcript = (slug: string, id: string) =>
+    path.join(projects, slug, "agent-transcripts", id, `${id}.jsonl`);
+  const record = (text: string) => JSON.stringify({
+    role: "user",
+    message: { content: [{ type: "text", text: `<timestamp>Monday, Sep 7, 2026, 2:59 PM (UTC+8)</timestamp>\n<user_query>\n${text}\n</user_query>` }] }
+  });
+  try {
+    for (const [slug, id, text] of [
+      ["Users-demo-app", real, "支持一下 cursor"],
+      ["private-var-folders-13-x-T-structured-today-call-sVddaS", scratch, "You are one bounded semantic node"]
+    ] as const) {
+      await mkdir(path.dirname(transcript(slug, id)), { recursive: true });
+      await writeFile(transcript(slug, id), record(text));
+      const stamp = new Date("2026-09-07T08:00:00.000Z");
+      await utimes(transcript(slug, id), stamp, stamp);
+    }
+
+    const snapshot = await loadAgentWorkSnapshot(
+      { ...createEmptyData().settings, sessionScanRoots: [projects], enabledSessionProviders: ["cursor" as const] },
+      { date: "2026-09-07", now: new Date("2026-09-07T12:00:00.000Z"), fs: fsAdapter, homeDir: temp }
+    );
+    assert.deepEqual(snapshot.sessions.map((session) => session.id), [real]);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("discovers Cursor agent-transcripts and keeps date filtering on embedded clocks", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "agent-notebook-cursor-"));
+  const project = path.join(temp, "cursor", "projects", "Users-demo-app");
+  const sessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const transcriptDir = path.join(project, "agent-transcripts", sessionId);
+  const noiseDir = path.join(project, "mcps", "cursor-ide-browser");
+  try {
+    await mkdir(transcriptDir, { recursive: true });
+    await mkdir(noiseDir, { recursive: true });
+    const file = path.join(transcriptDir, `${sessionId}.jsonl`);
+    await writeFile(file, [
+      JSON.stringify({
+        role: "user",
+        message: { content: [{ type: "text", text: "<timestamp>Monday, Sep 7, 2026, 2:59 PM (UTC+8)</timestamp>\n<user_query>\n支持一下 cursor\n</user_query>" }] }
+      }),
+      JSON.stringify({
+        role: "assistant",
+        message: { content: [{ type: "text", text: "开始接入 Cursor transcript。" }, { type: "tool_use", name: "Glob", input: { glob_pattern: "README.md", target_directory: "/Users/demo/app" } }] }
+      })
+    ].join("\n"));
+    await writeFile(path.join(noiseDir, "tools.json"), "{}\n");
+    const targetTime = new Date("2026-09-07T08:00:00.000Z");
+    await utimes(file, targetTime, targetTime);
+    await utimes(transcriptDir, targetTime, targetTime);
+
+    const settings = { ...createEmptyData().settings, sessionScanRoots: [path.join(temp, "cursor", "projects")], enabledSessionProviders: ["cursor" as const] };
+    const today = await loadAgentWorkSnapshot(settings, {
+      date: "2026-09-07",
+      now: new Date("2026-09-07T12:00:00.000Z"),
+      fs: fsAdapter,
+      homeDir: temp
+    });
+    assert.equal(today.sessions.length, 1);
+    assert.equal(today.sessions[0]?.platform, "cursor");
+    assert.equal(today.sessions[0]?.id, sessionId);
+    assert.equal(today.sessions[0]?.title, "支持一下 cursor");
+    assert.equal(today.sessions[0]?.projectPath, "/Users/demo/app");
+
+    const yesterday = await loadAgentWorkSnapshot(settings, {
+      date: "2026-09-06",
+      now: new Date("2026-09-07T12:00:00.000Z"),
+      fs: fsAdapter,
+      homeDir: temp
+    });
+    assert.equal(yesterday.sessions.length, 0);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
   }
 });

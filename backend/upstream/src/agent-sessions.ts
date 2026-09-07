@@ -46,7 +46,7 @@ export interface SessionScanOptions {
 
 export interface GeneratedSessionSummary {
   id: string;
-  platform: "codex" | "claude";
+  platform: "codex" | "claude" | "cursor";
   title: string;
   summary: string;
   artifacts: string[];
@@ -312,11 +312,12 @@ export function extractWorkSessionFromText(
     "未读到摘要，打开本地路径查看原始会话。";
   const projectPath = extractCanonicalProjectPath(parsed.records, platform);
   const branch = extractCanonicalBranch(parsed.records, platform);
-  const startedAt = firstUsefulText(collectStringsByKeys(parsed.records, ["timestamp", "createdAt", "startedAt"]));
+  const startedAt = firstUsefulText(collectStringsByKeys(parsed.records, ["timestamp", "createdAt", "startedAt"]))
+    ?? firstInstantIso(parsed.records);
   const artifacts = collectArtifacts(parsed.records, projectPath).slice(0, 12);
   const status = normalizeStatus(firstUsefulText(collectStringsByKeys(parsed.records, ["status", "state", "phase"])));
   const resumeHint = identity.resumable ? resumeCommand(platform, id) : undefined;
-  const lineage = extractSessionLineage(parsed.records, platform);
+  const lineage = extractSessionLineage(parsed.records, platform, path);
 
   const session: AgentWorkSession = {
     id,
@@ -342,9 +343,14 @@ export function extractWorkSessionFromText(
 
 function extractSessionLineage(
   records: unknown[],
-  platform: AgentPlatform
+  platform: AgentPlatform,
+  path?: string
 ): AgentWorkSession["lineage"] | undefined {
   if (platform === "claude") return { origin: "primary" };
+  if (platform === "cursor") {
+    const parentSessionId = cursorIdentityFromPath(path ?? "")?.parentSessionId;
+    return parentSessionId ? { origin: "subagent", parentSessionId, agentRole: "worker" } : { origin: "primary" };
+  }
   if (platform !== "codex") return { origin: "unknown" };
   for (const value of records) {
     const record = asRecord(value);
@@ -429,8 +435,12 @@ async function collectCandidateFiles(
     }
 
     const preferred = (entry: string) => entry.includes(day.stamp) ||
-      (platform === "codex" && isCodexDateDirectory(joinPath(dir, entry), day.stamp));
+      (platform === "codex" && isCodexDateDirectory(joinPath(dir, entry), day.stamp)) ||
+      (platform === "cursor" && isCursorSessionDirectoryName(entry));
     for (const entry of entries.sort((a, b) => Number(preferred(b)) - Number(preferred(a)) || b.localeCompare(a))) {
+      // Skipped before the budget is charged: these accumulate once per compile call and
+      // would otherwise crowd real Sessions out of the discovery limits.
+      if (platform === "cursor" && isCompilerScratchWorkspace(entry)) continue;
       if (files.length >= limits.maxFiles || inspected >= limits.maxEntries) {
         truncated = true;
         return;
@@ -457,7 +467,8 @@ async function collectCandidateFiles(
           isInTargetDay(stat, day) ||
           fullPath.includes(day.stamp) ||
           (platform === "codex" &&
-            (isCodexDateDirectory(fullPath, day.stamp) || isCodexDateHierarchyDirectory(fullPath)));
+            (isCodexDateDirectory(fullPath, day.stamp) || isCodexDateHierarchyDirectory(fullPath))) ||
+          (platform === "cursor" && shouldDescendCursorDirectory(fullPath, depth));
         if (shouldDescend) await walk(fullPath, depth + 1);
       } else if (stat.isFile()) {
         const filePlatform = inferPlatform(fullPath, platform);
@@ -508,6 +519,7 @@ async function readSession(
   }
   if (session && (isArchivedSessionPath(candidate.path) || isArchivedSessionPath(canonicalPath))) session.status = "completed";
   if (session) await enrichWorkspaceMetadata(session, fs);
+  if (session) await enrichCursorProjectPath(session, fs);
   return session;
 }
 
@@ -545,6 +557,9 @@ function extractSessionIdentity(
   platform: AgentPlatform
 ): { id: string; resumable: boolean } {
   let canonicalId: string | undefined;
+  // A Cursor subagent transcript is a child run of its parent chat, so its id is
+  // not something `agent --resume` can reopen.
+  let cursorSubagent = false;
 
   if (platform === "codex") {
     for (const value of records) {
@@ -563,10 +578,14 @@ function extractSessionIdentity(
       ]);
       if (canonicalId) break;
     }
+  } else if (platform === "cursor") {
+    const identity = cursorIdentityFromPath(path);
+    canonicalId = identity?.id;
+    cursorSubagent = Boolean(identity?.parentSessionId);
   }
 
-  if (canonicalId && (platform === "codex" || platform === "claude")) {
-    return { id: canonicalId, resumable: true };
+  if (canonicalId && (platform === "codex" || platform === "claude" || platform === "cursor")) {
+    return { id: canonicalId, resumable: !cursorSubagent };
   }
 
   const fallback =
@@ -592,6 +611,8 @@ function extractCanonicalProjectPath(records: unknown[], platform: AgentPlatform
       if (cwd?.trim()) return cleanOneLine(cwd);
     }
     return undefined;
+  } else if (platform === "cursor") {
+    return extractCursorProjectPath(records);
   }
   return firstUsefulText(collectStringsByKeys(records, ["projectPath", "workspace", "root"]));
 }
@@ -655,17 +676,10 @@ function hasTargetDayActivity(content: string, day: ActivityWindow): boolean | u
     if (!trimmed.startsWith("{")) continue;
     try {
       const record = JSON.parse(trimmed) as unknown;
-      const timestamp = recordField(record, "timestamp");
-      if (typeof timestamp !== "string" && typeof timestamp !== "number") continue;
-      const instant =
-        typeof timestamp === "number"
-          ? timestamp > 9_999_999_999
-            ? timestamp
-            : timestamp * 1000
-          : Date.parse(timestamp);
-      if (!Number.isFinite(instant)) continue;
-      sawCanonicalTimestamp = true;
-      if (instant >= day.start && instant < day.targetEnd) return true;
+      for (const instant of recordInstants(record)) {
+        sawCanonicalTimestamp = true;
+        if (instant >= day.start && instant < day.targetEnd) return true;
+      }
     } catch {
       // Malformed event lines are ignored; metadata fallback remains available.
     }
@@ -766,7 +780,7 @@ function normalizeGeneratedArtifacts(artifacts: string[], session: AgentWorkSess
         .filter((artifact) => !/\.jsonl$/i.test(artifact))
         .filter((artifact) => !artifact.split(/[\\/]/).some((segment) => segment.startsWith(".")))
         .filter((artifact) => !/(?:^|[\\/])[0-9a-f]{8}-[0-9a-f-]{27,}(?:\.[a-z0-9]+)?$/i.test(artifact))
-        .filter((artifact) => !/[\\/](?:\.codex[\\/]sessions|\.claude[\\/]projects)[\\/]/i.test(artifact))
+        .filter((artifact) => !/[\\/](?:\.codex[\\/]sessions|\.claude[\\/]projects|\.cursor[\\/]projects)[\\/]/i.test(artifact))
         .filter((artifact) => /[\\/]/.test(artifact) || /^[^.][^\\/]*\.[A-Za-z0-9]{1,8}$/.test(artifact))
     )
   ).slice(0, 12);
@@ -774,9 +788,9 @@ function normalizeGeneratedArtifacts(artifacts: string[], session: AgentWorkSess
 
 function firstUsefulText(values: string[]): string | undefined {
   for (const value of values) {
-    const cleaned = cleanOneLine(value);
+    const cleaned = cleanOneLine(unwrapUserFacingText(value));
     if (!cleaned) continue;
-    if (isNoiseText(cleaned)) continue;
+    if (isNoiseText(cleaned) || isCursorHarnessText(cleaned)) continue;
     return cleaned;
   }
   return undefined;
@@ -813,6 +827,7 @@ function resumeCommand(platform: AgentPlatform, id: string): string | undefined 
   if (!id) return undefined;
   if (platform === "codex") return `codex resume ${id}`;
   if (platform === "claude") return `claude --resume ${id}`;
+  if (platform === "cursor") return `agent --resume ${id}`;
   return undefined;
 }
 
@@ -941,8 +956,185 @@ function isCodexDateHierarchyDirectory(path: string): boolean {
   return /\/(?:20\d{2}|20\d{2}\/\d{2}|20\d{2}\/\d{2}\/\d{2})$/.test(normalized);
 }
 
+const CURSOR_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const CURSOR_HARNESS_PREFIXES = [
+  "the beginning of the above subagent result",
+  "perform any necessary follow-up actions in response to the subagent",
+  "briefly inform the user about the task result",
+  "your previous response was interrupted",
+  "continue with the questionnaire results",
+  "start multitasking"
+];
+
+// Cursor Agent CLI has no ephemeral or no-persistence flag, so every compile call
+// leaves a chat under ~/.cursor/projects keyed by the throwaway workspace it ran in.
+// Those transcripts hold this tool's own prompts and must never re-enter the corpus.
+const COMPILER_SCRATCH_WORKSPACE = /(?:^|[\\/-])(?:structured-today-call|agent-notebook-evidence)-/i;
+
+function isCompilerScratchWorkspace(name: string): boolean {
+  return COMPILER_SCRATCH_WORKSPACE.test(name);
+}
+
+function isCursorSessionDirectoryName(name: string): boolean {
+  return /^agent-transcripts$/i.test(name) || /^subagents$/i.test(name) || new RegExp(`^${CURSOR_UUID}$`, "i").test(name);
+}
+
+function shouldDescendCursorDirectory(path: string, depth: number): boolean {
+  const normalized = path.replace(/\\/g, "/");
+  const name = normalized.split("/").filter(Boolean).pop() ?? "";
+  if (isCursorSessionDirectoryName(name) || /\/agent-transcripts(?:\/|$)/i.test(normalized)) return true;
+  return depth === 0;
+}
+
+function cursorIdentityFromPath(path: string): { id: string; parentSessionId?: string } | undefined {
+  const normalized = path.replace(/\\/g, "/");
+  const subagent = normalized.match(new RegExp(`/(${CURSOR_UUID})/subagents/(${CURSOR_UUID})(?:\\.[a-z0-9]+)?$`, "i"));
+  if (subagent) return { id: subagent[2]!, parentSessionId: subagent[1] };
+  const primary = normalized.match(new RegExp(`/(${CURSOR_UUID})/(${CURSOR_UUID})(?:\\.[a-z0-9]+)?$`, "i"));
+  if (primary) return { id: primary[2]! };
+  const stem = basenameStem(path);
+  return new RegExp(`^${CURSOR_UUID}$`, "i").test(stem) ? { id: stem } : undefined;
+}
+
+function extractCursorProjectPath(records: unknown[]): string | undefined {
+  const paths = collectStringsByKeys(records, ["target_directory", "cwd", "projectPath", "workspace", "path"])
+    .map((value) => cleanOneLine(value))
+    .filter((value) => value.startsWith("/") && !/\.jsonl$/i.test(value))
+    .map((value) => /\.[A-Za-z0-9]{1,16}$/.test(value.split("/").pop() ?? "") ? value.replace(/\/[^/]+$/, "") : value)
+    .filter((value) => value && value !== "/");
+  if (!paths.length) return undefined;
+  const common = commonDirectoryPrefix(paths);
+  return common && common !== "/" ? common : undefined;
+}
+
+function commonDirectoryPrefix(paths: string[]): string | undefined {
+  const split = paths.map((value) => value.split("/").filter(Boolean));
+  const first = split[0];
+  if (!first) return undefined;
+  const prefix: string[] = [];
+  for (let index = 0; index < first.length; index += 1) {
+    const part = first[index];
+    if (!part || split.some((item) => item[index] !== part)) break;
+    prefix.push(part);
+  }
+  return prefix.length ? `/${prefix.join("/")}` : undefined;
+}
+
+async function enrichCursorProjectPath(session: AgentWorkSession, fs: RuntimeFileSystem): Promise<void> {
+  if (session.platform !== "cursor" || session.projectPath) return;
+  const slug = cursorProjectSlugFromPath(session.path);
+  if (!slug) return;
+  const resolved = await resolveCursorProjectSlug(slug, fs);
+  if (resolved) session.projectPath = resolved;
+}
+
+function cursorProjectSlugFromPath(path: string): string | undefined {
+  const match = path.replace(/\\/g, "/").match(/(?:^|\/)\.cursor\/projects\/([^/]+)\/agent-transcripts\//i);
+  return match?.[1];
+}
+
+async function resolveCursorProjectSlug(slug: string, fs: RuntimeFileSystem): Promise<string | undefined> {
+  let remaining = slug;
+  let current = "/";
+  while (remaining) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(current);
+    } catch {
+      return current !== "/" ? current : undefined;
+    }
+    let best: { name: string; normalized: string } | undefined;
+    for (const name of entries) {
+      const normalized = name.replace(/_/g, "-");
+      if (remaining === normalized || remaining.startsWith(`${normalized}-`)) {
+        if (!best || normalized.length > best.normalized.length) best = { name, normalized };
+      }
+    }
+    if (!best) return current !== "/" ? current : undefined;
+    current = current === "/" ? `/${best.name}` : `${current}/${best.name}`;
+    remaining = remaining === best.normalized ? "" : remaining.slice(best.normalized.length + 1);
+  }
+  try {
+    if ((await fs.stat(current)).isDirectory()) return current;
+  } catch {
+    return undefined;
+  }
+  return current;
+}
+
+function recordInstants(value: unknown): number[] {
+  const instants: number[] = [];
+  const seen = new Set<number>();
+  const push = (instant: number) => {
+    if (!Number.isFinite(instant) || seen.has(instant)) return;
+    seen.add(instant);
+    instants.push(instant);
+  };
+  const parseTimestamp = (child: unknown) => {
+    if (typeof child === "number") {
+      push(child > 9_999_999_999 ? child : child * 1000);
+      return;
+    }
+    if (typeof child !== "string") return;
+    const tagged = child.match(/<timestamp>\s*([^<]+?)\s*<\/timestamp>/i);
+    if (tagged) {
+      const parsed = Date.parse(tagged[1]!.trim());
+      if (Number.isFinite(parsed)) push(parsed);
+      return;
+    }
+    if (/^\d{4}-\d{2}-\d{2}T/.test(child) || /(?:UTC|GMT)/i.test(child)) {
+      const parsed = Date.parse(child);
+      if (Number.isFinite(parsed)) push(parsed);
+    }
+  };
+  const walk = (child: unknown, depth: number) => {
+    if (depth > 8 || instants.length >= 40) return;
+    if (typeof child === "string") {
+      parseTimestamp(child);
+      return;
+    }
+    if (Array.isArray(child)) {
+      for (const item of child) walk(item, depth + 1);
+      return;
+    }
+    const record = asRecord(child);
+    if (!record) return;
+    for (const [key, item] of Object.entries(record)) {
+      if (/timestamp|createdat|startedat|completedat|created_at|started_at|completed_at/i.test(key)) {
+        parseTimestamp(item);
+      } else {
+        walk(item, depth + 1);
+      }
+    }
+  };
+  walk(value, 0);
+  return instants;
+}
+
+function firstInstantIso(records: unknown[]): string | undefined {
+  for (const record of records) {
+    const instant = recordInstants(record)[0];
+    if (instant !== undefined) return new Date(instant).toISOString();
+  }
+  return undefined;
+}
+
+function unwrapUserFacingText(value: string): string {
+  const query = value.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/i);
+  if (query?.[1]?.trim()) return query[1].trim();
+  return value.replace(/<timestamp>\s*[^<]*<\/timestamp>\s*/gi, "").trim() || value;
+}
+
+function isCursorHarnessText(value: string): boolean {
+  const low = value.trim().toLowerCase();
+  return CURSOR_HARNESS_PREFIXES.some((prefix) => low.startsWith(prefix));
+}
+
 function inferPlatform(path: string, fallback: AgentPlatform = "other"): AgentPlatform {
   const lower = path.toLowerCase();
+  if (lower.includes(".cursor") || lower.includes("agent-transcripts") || /(^|[\\/])cursor([\\/]|$)/i.test(lower)) {
+    return "cursor";
+  }
   if (lower.includes("codex")) return "codex";
   if (lower.includes("claude")) return "claude";
   if (lower.includes("minimax") || lower.includes("mini-max")) return "minimax";
@@ -950,7 +1142,7 @@ function inferPlatform(path: string, fallback: AgentPlatform = "other"): AgentPl
 }
 
 function isCandidateSessionFile(path: string, platform: AgentPlatform): boolean {
-  if (platform === "codex" || platform === "claude") return /\.jsonl$/i.test(path);
+  if (platform === "codex" || platform === "claude" || platform === "cursor") return /\.jsonl$/i.test(path);
   return false;
 }
 
@@ -987,7 +1179,10 @@ function isNoiseText(value: string): boolean {
     /^-{3,}$/.test(value) ||
     /^Cancelled at\b/i.test(value) ||
     /^\[\d{4}-\d{2}-\d{2}[ T]/.test(value) ||
-    value.startsWith("<environment_context>") ||
+    value.startsWith("<timestamp>") ||
+    value.startsWith("<user_query>") ||
+    value === "[REDACTED]" ||
+    isCursorHarnessText(value) ||
     value.startsWith("<permissions instructions>") ||
     value.startsWith("<collaboration_mode>") ||
     value.startsWith("<recommended_plugins>") ||

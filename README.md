@@ -9,7 +9,7 @@
 
 **今天，和 AI 一起推进了什么？**
 
-把散落在 Codex、Claude Code 中的工作整理成一份有来源依据的 daily brief。在终端查看工作脉络、当前进展和参与情况，再按需深读一条工作线。
+把散落在 Codex、Claude Code 和 Cursor 中的工作整理成一份有来源依据的 daily brief。在终端查看工作脉络、当前进展和参与情况，再按需深读一条工作线。
 
 ![Agent Note CLI 交互终端预览](docs/assets/agent-note-preview.gif)
 
@@ -36,7 +36,9 @@ agent-note --version
 
 Homebrew 会安装所需的 Node.js。发布包已包含锁定的运行时依赖，不需要另行克隆 App 仓库，也不需要在安装时构建。
 
-生成 brief 还需要你已安装并登录 [Codex CLI](https://developers.openai.com/codex/cli/) 或 [Claude Code](https://code.claude.com/docs/en/overview)。Agent Note 使用你的模型额度；**首次生成、刷新和首次深读可能产生模型费用，并向所选服务发送会话证据**。仅阅读已有结果可用 `--read-only`。
+生成 brief 还需要已安装并登录**至少一个**模型 CLI：[Codex CLI](https://developers.openai.com/codex/cli/)、[Claude Code](https://code.claude.com/docs/en/overview) 或 [Cursor Agent CLI](https://cursor.com/docs/cli/using)（命令为 `agent`，先运行 `agent login` 或设置 `CURSOR_API_KEY`）。Agent Note 使用你的模型额度；**首次生成、刷新和首次深读可能产生模型费用，并向所选服务发送会话证据**。仅阅读已有结果可用 `--read-only`。
+
+读取会话来源不需要登录任何 CLI。默认由会话来源决定用哪个 CLI 整理，`--compiler` 可以单独指定——某个 CLI 没装或（企业受管账号）无法登录时，仍可用别的 CLI 整理它的会话。
 
 <details>
 <summary>从源码安装（macOS / Linux）</summary>
@@ -64,7 +66,7 @@ agent-note --version
 agent-note brief --source codex
 ```
 
-只用 Claude Code 则替换为 `--source claude`。两个来源都已配置时，运行 `agent-note brief`。
+只用 Claude Code 则替换为 `--source claude`，只用 Cursor 则用 `--source cursor`。多个来源都已配置时，运行 `agent-note brief`。
 
 不带参数运行 `agent-note`，会进入可持续导航的终端应用。也可以用 `agent-note ui --source codex` 带着指定范围进入：
 
@@ -110,6 +112,8 @@ Agent 的参与：完成工程实现。
 | 看今日工作脉络 | `agent-note brief` |
 | 回看指定日期 | `agent-note brief --date 2026-09-05` |
 | 只看当前项目 | `agent-note brief --project "$PWD"` |
+| 只用 Cursor 会话 | `agent-note brief --source cursor` |
+| 读 Cursor 会话但用 Claude 整理 | `agent-note brief --source cursor --compiler claude` |
 | 深读第 1 条工作线 | `agent-note brief --workline 1` |
 | 阅读已有结果，不调用模型 | `agent-note brief --read-only` |
 | 用最新证据重新整理 | `agent-note brief --refresh` |
@@ -132,7 +136,7 @@ Agent 的参与：完成工程实现。
 
 ## 数据在哪里？
 
-默认读取本机 `~/.codex/sessions`、`~/.codex/archived_sessions` 和 `~/.claude/projects`；原始会话只读。CLI 结果与恢复状态保存在 `~/.local/share/agent-note`，按来源、项目和时区隔离，可用 `--data-dir` 修改。
+默认读取本机 `~/.codex/sessions`、`~/.codex/archived_sessions`、`~/.claude/projects` 和 `~/.cursor/projects`；原始会话只读。CLI 结果与恢复状态保存在 `~/.local/share/agent-note`，按来源、项目和时区隔离，可用 `--data-dir` 修改。
 
 没有 Agent Note 账号或必需的 Agent Note 云服务。AI 生成走你的 provider；发送的会话证据可能包含代码、路径和敏感信息。继承的 provider 或 LangChain 环境配置仍可能影响这些依赖的行为，详见 [配置、隐私与结果边界](docs/usage.md)。
 
@@ -145,7 +149,7 @@ brew upgrade wdblink/tap/agent-note-cli
 brew uninstall agent-note-cli
 ```
 
-卸载保留本地 brief 和恢复数据；不会删除 Codex / Claude Code 的会话。
+卸载保留本地 brief 和恢复数据；不会删除 Codex / Claude Code / Cursor 的会话。
 
 ## 开发与反馈
 

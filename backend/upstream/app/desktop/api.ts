@@ -185,7 +185,7 @@ export interface DesktopSummaryJob {
   status: "idle" | "running" | "complete" | "unavailable";
   total: number;
   completed: number;
-  models: { codex: string; claude: string };
+  models: { codex: string; claude: string; cursor: string };
   message?: string;
 }
 
@@ -284,7 +284,7 @@ export interface StructuredTodaySpanState {
   statementId: string;
   spanId: string;
   evidenceId: string;
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "cursor";
   sessionId: string;
   role: "user" | "assistant";
   authorKind: "human" | "agent" | "automation" | "host-notification" | "unknown";
