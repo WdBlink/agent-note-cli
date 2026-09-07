@@ -91,6 +91,8 @@ rm -rf ~/.cursor/projects/*structured-today-call*  # 再删
 
 三是 `~/.cursor/mcp.json` 中配置的 MCP server 会一起加载进整理调用，会话证据可能因此流向第三方服务。介意这点时，用 `--compiler codex` 或 `--compiler claude` 整理同一批 Cursor 会话。
 
+另有一点与整理器无关，只要读 Cursor 会话就会遇到：Codex 与 Claude 的 transcript 只追加，Cursor 则可能在会话仍活跃时改写已写入的记录。证据是按字节冻结并逐字节校验的，所以深读一条原文已被改写的工作线会失败，并提示先 `--refresh`。深读活跃会话时，紧接着生成之后做最稳妥。
+
 Cursor Agent CLI 的登录独立于 Cursor 编辑器：装好后仍需单独 `agent login`（或设 `CURSOR_API_KEY`）。企业受管账号是否允许 CLI 与 API key 由管理员配置，可能无法登录；这种情况下 `--source cursor` 照常读取会话，整理改用 `--compiler`。用 `agent status` 确认当前登录状态，用 `agent --list-models` 确认可用模型名再决定 `--cursor-model`。
 
 ## 自定义范围

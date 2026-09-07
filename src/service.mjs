@@ -83,7 +83,14 @@ export async function brief(options, dependencies = {}) {
       if (!dossier && !options.readOnly) {
         checkpointer ??= NodeSqliteSaver.fromConnectionString(path.join(dataDir, 'structured-today-workflows-v1.sqlite'));
         runtimeStore ??= new StructuredTodayRuntimeStore(path.join(dataDir, 'structured-today-runtime-v1.sqlite'));
-        dossier = await runStructuredTodayDossierPreparation({ logicalDate: date, indexReference: review.activeIndexReference, worklineId: selected.workline.worklineId, settings: compileSettings, repository, checkpointer, runtimeStore, runner, onProgress: options.onProgress });
+        try {
+          dossier = await runStructuredTodayDossierPreparation({ logicalDate: date, indexReference: review.activeIndexReference, worklineId: selected.workline.worklineId, settings: compileSettings, repository, checkpointer, runtimeStore, runner, onProgress: options.onProgress });
+        } catch (error) {
+          // Frozen evidence is verified byte for byte, so a transcript rewritten since the
+          // index was compiled fails deep inside the reader with no way to act on it.
+          if (review.mode !== 'stale') throw error;
+          throw new Error(`${error.message}\n这条工作线的会话原文在生成当前工作脉络之后发生了变化。请先运行 --refresh 重新整理，再深读。`);
+        }
       }
       if (!dossier) throw new Error('这条工作线尚未生成深读；移除 --read-only 后可按 App 的相同流程生成。');
     }
