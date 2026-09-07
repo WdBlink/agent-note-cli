@@ -50,9 +50,9 @@ class ScriptedTerminal {
   async menu(input) {
     const result = this.next('menu', input);
     if (result === null) return null;
-    const item = input.items.find(i => i.id === result);
+    const item = input.items.find(i => i.id === (typeof result === 'string' ? result : result.id));
     assert.ok(item, `menu ${input.title} has no ${result}`);
-    return item;
+    return result.action ? { ...item, action: result.action } : item;
   }
   async read(input) { return this.next('read', input); }
   async prompt(input) { const value = this.next('prompt', input); if (value !== null) await input.validate(value); return value; }
@@ -124,24 +124,33 @@ test('interactive app generates, opens a pinned workline, reads source, exports 
   const exported = path.join(f.dir, 'brief.md');
   let calls = 0;
   const requests = [];
+  const jumps = [];
   const delegate = structuredRunner();
   const runner = request => { calls++; return delegate(request); };
   const terminal = new ScriptedTerminal([
     ['menu', /^首页$/, 'brief'], ['menu', /^工作脉络$/, 'generate'],
-    ['menu', /^工作脉络$/, 'workline-structured-today'], ['read', /^工作线$/, 'd'],
-    ['menu', /^准备深读$/, 'generate'], ['read', /深读$/, 's'],
+    ['menu', /^工作脉络$/, 'workline-structured-today'], ['read', /^工作线$/, 'o', page => {
+      assert.equal(page.actions.o, '直达会话'); assert.match(page.text, /来源会话：Codex/); page.position.scroll = 4;
+    }], ['read', /^工作线$/, 'd', page => assert.equal(page.position.scroll, 4)],
+    ['menu', /^准备深读$/, 'generate'], ['read', /深读$/, 'o', page => { page.position.scroll = 8; }],
+    ['read', /深读$/, 's', page => assert.equal(page.position.scroll, 8)],
     ['menu', /来源$/, 'session:codex:session-1'],
-    ['read', /^来源/, null, page => assert.match(page.text, /检查终端导航与冻结原文/)],
+    ['read', /^来源/, 'o', page => { assert.match(page.text, /检查终端导航与冻结原文/); page.position.scroll = 2; }],
+    ['read', /^来源/, null, page => assert.equal(page.position.scroll, 2)],
     ['menu', /来源$/, null], ['read', /深读$/, 'e'],
     ['menu', /^导出$/, 'markdown'], ['prompt', /保存位置/, exported], ['read', /导出完成/, null],
     ['read', /深读$/, null], ['read', /^工作线$/, null], ['menu', /^工作脉络$/, null],
     ['menu', /^首页$/, 'providers'], ['menu', /^会话来源$/, 'claude'], ['menu', /^首页$/, null]
   ]);
-  await runInteractive(f.options, { terminal, service: (options, dependencies = {}) => {
+  await runInteractive(f.options, { terminal,
+    sessionInspector: async sessions => sessions.map(session => ({ session, targets: [{ id: 'existing', label: 'Otty · 已打开' }] })),
+    sessionJumper: async (session, target) => { jumps.push([session.id, target]); return 'Otty'; },
+    service: (options, dependencies = {}) => {
     requests.push(options);
     return brief(options, { ...dependencies, runner });
   } });
   assert.equal(calls, 5);
+  assert.deepEqual(jumps, Array(3).fill(['session-1', 'existing']), 'all three reading surfaces jump without additional model calls');
   assert.ok(requests[0].readOnly, 'opening the app must not call a provider');
   for (const request of requests.filter(r => r.workline)) {
     assert.equal(request.workline, 'workline-structured-today');
@@ -150,6 +159,57 @@ test('interactive app generates, opens a pinned workline, reads source, exports 
   assert.match(await fs.readFile(exported, 'utf8'), /如何验证/);
   assert.equal(JSON.parse(await fs.readFile(path.join(f.options.dataDir, 'ui-preferences.json'), 'utf8')).source, 'claude');
   assert.ok(terminal.closed);
+});
+
+test('multiple conversations require selection; source-list jump uses the highlighted canonical session', async t => {
+  const f = await fixture(t);
+  const sessions = [
+    { id: 'first', platform: 'codex', title: '同名工作', path: '/first.jsonl' },
+    { id: 'second', platform: 'claude', title: '同名工作', path: '/second.jsonl' }
+  ];
+  const workline = { worklineId: 'work', title: '双来源', summary: '摘要', evidenceIds: ['e1', 'e2'], sessionIds: ['first', 'second'], participation: { status: 'undetermined', reason: '未判断' } };
+  const view = { mode: 'compiled', sessions, index: { revision: 1, worklines: [workline], evidence: sessions.map((s, i) => ({ evidenceId: `e${i + 1}`, provider: s.platform, sourcePath: s.path, sessionId: s.id, range: 'bytes 0-10' })) } };
+  const jumps = [];
+  const terminal = new ScriptedTerminal([
+    ['menu', /^首页$/, 'brief'], ['menu', /^工作脉络$/, 'work'], ['read', /^工作线$/, 'o'],
+    ['menu', /^直达会话$/, '1', page => {
+      assert.match(page.items[0].label, /^Codex · 同名工作/);
+      assert.match(page.items[1].label, /^Claude Code · 同名工作/);
+      assert.match(page.items[1].hint, /已打开/);
+      assert.match(page.items[1].preview, /会话 ID：second/);
+    }],
+    ['read', /^工作线$/, 's'],
+    ['menu', /来源$/, { id: 'e1', action: 'o' }, page => assert.equal(page.enterLabel, '原文')],
+    ['menu', /来源$/, 'e2'], ['read', /^来源/, null],
+    ['menu', /来源$/, null, page => assert.equal(page.initial, 1)],
+    ['read', /^工作线$/, null], ['menu', /^工作脉络$/, null], ['menu', /^首页$/, null]
+  ]);
+  await runInteractive({ ...f.options, readOnly: true }, { terminal,
+    service: async options => { assert.equal(options.readOnly, true); return view; },
+    sourceReader: async (_view, id) => { assert.equal(id, 'e2'); return { path: '/second.jsonl', messages: [] }; },
+    sessionInspector: async list => list.map(session => ({ session, targets: [{ id: session.id, label: 'Otty · 已打开' }] })),
+    sessionJumper: async session => { jumps.push(session); return 'Otty'; }
+  });
+  assert.deepEqual(jumps, [sessions[1], sessions[0]]);
+});
+
+test('unlocated or failed window navigation explains the failure and keeps the source reader open', async t => {
+  const f = await fixture(t);
+  const session = { id: 'id', platform: 'codex', title: '来源标题', path: '/source.jsonl' };
+  let attempts = 0;
+  const terminal = new ScriptedTerminal([
+    ['menu', /^首页$/, 'sources'], ['menu', /^会话与来源$/, 'codex:id:/source.jsonl'],
+    ['read', /^来源/, 'o'], ['read', /直达会话 \/ 未打开/, null, page => assert.match(page.text, /状态不明/)],
+    ['read', /^来源/, 'o'], ['read', /直达会话 \/ 未打开/, null, page => assert.match(page.text, /permission denied/)],
+    ['read', /^来源/, null], ['menu', /^会话与来源$/, null], ['menu', /^首页$/, null]
+  ]);
+  await runInteractive(f.options, { terminal,
+    service: async () => ({ sessions: [session], index: null }),
+    sourceReader: async () => ({ path: session.path, messages: [] }),
+    sessionInspector: async () => [{ session, targets: attempts++ ? [{ id: 'window' }] : [], reason: '状态不明' }],
+    sessionJumper: async () => { throw new Error('permission denied'); }
+  });
+  assert.equal(attempts, 2);
 });
 
 test('project/date changes invalidate cached view; read-only browsing never offers generation', async t => {
@@ -253,6 +313,22 @@ test('terminal handles buffered arrows, Unicode search, resize, paging and resto
   assert.equal(f.input.isRaw, false);
   assert.equal(f.signals.listenerCount('SIGINT'), 0);
   assert.match(f.text(), /\x1b\[\?1049l$/);
+});
+
+test('menu jump shortcut acts on the selected filtered item and does not steal search input or Ctrl-O', async t => {
+  const f = tty(t);
+  f.terminal.start();
+  try {
+    const items = [{ id: 'one', label: 'one' }, { id: 'other', label: 'other' }];
+    const selecting = f.terminal.menu({ title: '来源', items, actions: { o: '直达' }, searchable: true, enterLabel: '原文' });
+    f.input.write('/oth\r\x0fo');
+    assert.deepEqual(await selecting, { ...items[1], action: 'o' });
+    assert.match(f.text(), /Enter原文.*o直达/);
+    assert.equal(items[1].action, undefined, 'selecting an action does not mutate source identity');
+    const reading = f.terminal.menu({ title: '来源', items, actions: { o: '直达' } });
+    f.input.write('\r');
+    assert.deepEqual(await reading, items[0]);
+  } finally { f.terminal.close(); }
 });
 
 test('background status redraw preserves menu selection and reader position', async t => {

@@ -277,7 +277,7 @@ export class Terminal {
     if (output) this.output.write(output);
   }
 
-  async menu({ title, description = '', items, searchable = false, initial = 0, note = '' }) {
+  async menu({ title, description = '', items, searchable = false, initial = 0, note = '', actions = {}, enterLabel = '打开' }) {
     let selected = initial, query = '', searching = false;
     const matches = () => items.filter(item => `${item.label} ${item.hint ?? ''}`.toLowerCase().includes(query.toLowerCase()));
     const render = () => {
@@ -307,7 +307,7 @@ export class Terminal {
       }
       return { title, body,
         note: searching || query ? `搜索 / ${query}▏   ${list.length} 项` : (typeof note === 'function' ? note() : note) || (list.length ? `${selected + 1} / ${list.length}` : ''),
-        footer: searching ? '输入筛选 · Enter 完成 · Esc 清除' : this.columns < 60 ? '↑↓  Enter  Esc返回  q退出' : `↑↓/jk/C-n,p 移动  Enter打开${searchable ? '  /搜索' : ''}  Esc返回  q退出` };
+        footer: searching ? '输入筛选 · Enter 完成 · Esc 清除' : `↑↓  Enter${enterLabel}${Object.entries(actions).map(([key, action]) => `  ${key}${action}`).join('')}${searchable && this.columns >= 60 ? '  /搜索' : ''}  Esc返回  q退出` };
     };
     this.show(render);
     while (!this.quit) {
@@ -320,6 +320,7 @@ export class Terminal {
         else if (!key.ctrl && !key.meta && key.text && clean(key.text) === key.text) query = (query + key.text).slice(0, 160);
         selected = 0;
       } else if (key.text === 'q') { this.stop(); return null; }
+      else if (!key.ctrl && !key.meta && actions[key.text] && matches()[selected]) return { ...matches()[selected], action: key.text };
       else if (key.text === '/' && searchable) searching = true;
       else if (navigation(key, Math.max(1, Math.floor((this.capacity - 2) / 2))) !== undefined) {
         const next = selected + navigation(key, Math.max(1, Math.floor((this.capacity - 2) / 2)));
@@ -349,7 +350,7 @@ export class Terminal {
       scroll = Math.max(0, Math.min(scroll, lines.length - this.capacity));
       position.scroll = scroll;
       return { title, body: lines.slice(scroll), note: (typeof note === 'function' ? note() : note) || `${scroll + 1}–${Math.min(lines.length, scroll + this.capacity)} / ${lines.length} 行`,
-        footer: this.columns < 70 ? `↑↓ ${Object.entries(actions).map(([key, action]) => `${key}${action.slice(0, 2)}`).join(' ')} Esc返回` : `Ctrl-F/B 翻页 · Ctrl-D/U 半页 · ? 键位${Object.entries(actions).map(([key, action]) => ` · ${key} ${action}`).join('')} · Esc 返回` };
+        footer: this.columns < 100 ? `↑↓ ${Object.entries(actions).map(([key, action]) => `${key}${action.slice(0, 2)}`).join(' ')} ?键位 Esc返回` : `↑↓ 滚动 · ? 键位${Object.entries(actions).map(([key, action]) => ` · ${key} ${action}`).join('')} · Esc 返回` };
     };
     this.show(render);
     while (!this.quit) {

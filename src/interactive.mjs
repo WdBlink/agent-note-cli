@@ -2,10 +2,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { brief, readSource, today, validateDate } from './service.mjs';
+import { brief, readSource, sourceSession, conversationSession, worklineSessions, today, validateDate } from './service.mjs';
 import { render } from './presentation.mjs';
 import { Terminal } from './terminal.mjs';
 import { version, checkForUpdate, readReleaseNotes, upgradeInstructions } from './updates.mjs';
+import { inspectSessionTargets, jumpToSession } from './session-jump.mjs';
 
 const sourceNames = { all: 'Codex + Claude + Copilot', codex: 'Codex', claude: 'Claude Code', copilot: 'GitHub Copilot' };
 const modeNames = { raw: '尚未生成', compiled: '已保存', stale: '来源有变化' };
@@ -14,7 +15,8 @@ const ref = index => index && ({ artifactId: index.artifactId, revision: index.r
 const shiftDate = (date, days) => { const d = new Date(`${date}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); };
 const option = (id, label, hint, preview) => ({ id, label, hint, preview });
 
-export async function runInteractive(initialOptions = {}, { terminal = new Terminal({ color: initialOptions.color }), service = brief, sourceReader = readSource, updateChecker = checkForUpdate } = {}) {
+export async function runInteractive(initialOptions = {}, { terminal = new Terminal({ color: initialOptions.color }), service = brief, sourceReader = readSource, updateChecker = checkForUpdate,
+  sessionInspector = inspectSessionTargets, sessionJumper = jumpToSession } = {}) {
   const options = { ...initialOptions, date: initialOptions.date ?? today(), workline: undefined, refresh: false };
   const preferenceFile = path.join(options.dataDir ?? path.join(os.homedir(), '.local/share/agent-note'), 'ui-preferences.json');
   let preferences = {}, preferenceError;
@@ -96,28 +98,85 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
     if (saved) await terminal.read({ title: '导出完成', text: `已保存\n\n${expand(filename)}\n\n${format.id === 'json' ? '包含完整结构化结果。' : '可用文本编辑器或笔记应用打开。'}` });
   }
 
+  let jumpNotice = '';
+  const sessionLabel = session => `${sourceNames[session.platform] ?? session.platform} · ${session.title || session.id}`;
+  const sessionContext = session => `${session.worktreePath ?? session.projectPath ?? '项目未知'}\n会话 ID：${session.id}`;
+  const sourceSummary = workline => {
+    const sessions = worklineSessions(view, workline);
+    return sessions.length ? `来源会话：${sessions.slice(0, 2).map(sessionLabel).join('；')}${sessions.length > 2 ? ` 等 ${sessions.length} 个会话` : ''}` : '来源会话：暂无可定位的主会话';
+  };
+  async function jump(sessions) {
+    jumpNotice = '';
+    if (!sessions.length) {
+      await terminal.read({ title: '直达会话 / 未打开', text: '没有找到与当前来源对应的主会话。请重新扫描来源；不会按标题猜测或新建会话。' });
+      return;
+    }
+    try {
+      const states = await terminal.busy('定位会话窗口', ({ signal }) => sessionInspector(sessions, { signal }));
+      if (!states || terminal.quit) return;
+      let state = states[0];
+      if (states.length > 1) {
+        const selected = await terminal.menu({ title: '直达会话', description: '选择要继续沟通的来源会话。', searchable: true, enterLabel: '直达', items: states.map((item, i) => ({
+          ...option(String(i), sessionLabel(item.session), item.targets.map(t => t.label).join(' / ') || '未定位窗口',
+            `${sessionLabel(item.session)}\n\n${sessionContext(item.session)}\n\n${item.reason || item.targets.map(t => t.label).join('\n')}`), state: item
+        })) });
+        if (!selected) return;
+        state = selected.state;
+      }
+      if (!state.targets.length) {
+        await terminal.read({ title: '直达会话 / 未打开', text: `${sessionLabel(state.session)}\n\n${state.reason}\n\n${sessionContext(state.session)}` });
+        return;
+      }
+      let target = state.targets[0];
+      if (state.targets.length > 1) {
+        const selected = await terminal.menu({ title: '选择会话窗口', description: sessionLabel(state.session), enterLabel: '直达', items: state.targets.map(t => ({ ...option(t.id, t.label, '切换到现有窗口'), target: t })) });
+        if (!selected) return;
+        target = selected.target;
+      }
+      if (terminal.quit) return;
+      const destination = await terminal.busy('直达会话', ({ signal }) => sessionJumper(state.session, target.id, { signal }));
+      if (destination && !terminal.quit) jumpNotice = `已请求直达 ${destination} · 返回后继续阅读`;
+    } catch (error) {
+      await terminal.read({ title: '直达会话 / 未打开', text: `${error.message}\n\n未创建或恢复任何会话。可切回原窗口，或稍后重试。` });
+    }
+  }
+  const jumpSource = id => jump([conversationSession(view, sourceSession(view, id))].filter(Boolean));
+
   async function sources(workline) {
     if (!view && !await load()) return;
     const items = view.index
       ? view.index.evidence.filter(e => !workline || workline.evidenceIds.includes(e.evidenceId)).map(e => ({
-        ...option(e.evidenceId, path.basename(e.sourcePath), `${e.provider} · ${e.range}`, `${e.sourcePath}\n\n冻结范围：${e.range}\n\n读取前校验内容哈希。`)
+        ...option(e.evidenceId, sourceSession(view, e.evidenceId)?.title || path.basename(e.sourcePath), `${sourceNames[e.provider]} · ${e.range}`, `${e.sourcePath}\n\n冻结范围：${e.range}\n\nEnter 阅读原文 · o 直达会话${sourceSession(view, e.evidenceId)?.lineage?.origin === 'subagent' ? '（所属主会话）' : ''}`)
       }))
       : view.sessions.map(s => option(`${s.platform}:${s.id}:${s.path}`, s.title || s.id, `${s.platform} · ${s.projectPath ?? '项目未知'}`, s.path));
+    let selection = 0;
     while (!terminal.quit) {
-      const selected = await terminal.menu({ title: workline ? '工作线 / 来源' : '会话与来源', description: '选择来源，读取经过冻结范围校验的对话原文。', items: [
+      const selected = await terminal.menu({ title: workline ? '工作线 / 来源' : '会话与来源', description: 'Enter 阅读冻结原文 · o 直达原会话继续沟通', initial: selection, note: jumpNotice, enterLabel: '原文', actions: { o: '直达' }, items: [
         ...items, option('coverage', '扫描与证据覆盖', `${view.sessions.length} 条会话`, view.diagnostic ?? '查看未读、失败与截断信息。')
       ], searchable: true });
       if (!selected) return;
+      selection = Math.max(0, items.findIndex(item => item.id === selected.id));
+      if (selected.action === 'o') { if (selected.id !== 'coverage') await jumpSource(selected.id); continue; }
       if (selected.id === 'coverage') {
         const coverage = [view.diagnostic, ...view.warnings, ...view.evidenceCoverage.map(e => `${e.disposition}  ${e.sourceId}\n${e.detail}`)].filter(Boolean);
         await terminal.read({ title: '扫描与证据覆盖', text: coverage.length ? coverage.join('\n\n') : '未记录扫描异常。' });
       } else {
         const transcript = await perform('读取冻结原文', () => sourceReader(view, selected.id));
-        if (transcript) await terminal.read({ title: `来源 / ${selected.label}`, text: [
-          transcript.path, transcript.warning, transcript.truncated ? '注意：当前显示经过截断。' : '',
-          ...transcript.messages.map(m => `${m.role === 'user' ? ({ human: '用户', agent: 'Agent 指令', automation: '自动任务' }[m.authorKind] ?? '用户角色（身份未确认）') : '助手'}  ${m.timestamp ?? ''}\n${m.content}`),
-          `已省略工具事件：${transcript.omittedToolEvents}`
-        ].filter(Boolean).join('\n\n') });
+        if (transcript) {
+          const position = {};
+          const session = sourceSession(view, selected.id);
+          const text = [
+            ...(session ? [sessionLabel(session), `会话 ID：${session.id}${session.lineage?.origin === 'subagent' ? '\n直达将返回所属主会话。' : ''}`] : []),
+            transcript.path, transcript.warning, transcript.truncated ? '注意：当前显示经过截断。' : '',
+            ...transcript.messages.map(m => `${m.role === 'user' ? ({ human: '用户', agent: 'Agent 指令', automation: '自动任务' }[m.authorKind] ?? '用户角色（身份未确认）') : '助手'}  ${m.timestamp ?? ''}\n${m.content}`),
+            `已省略工具事件：${transcript.omittedToolEvents}`
+          ].filter(Boolean).join('\n\n');
+          let action;
+          do {
+            action = await terminal.read({ title: `来源 / ${selected.label}`, text, position, note: jumpNotice, actions: { o: '直达会话' } });
+            if (action === 'o') await jumpSource(selected.id);
+          } while (action && !terminal.quit);
+        }
       }
     }
   }
@@ -128,9 +187,10 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
     const participation = workline.participation.status === 'undetermined' ? workline.participation.reason :
       [['human', '你的参与'], ['agent', 'Agent 的参与'], ['joint', '共同推进']].filter(([key]) => workline.participation[key]).map(([key, label]) => `${label}：${workline.participation[key]}`).join('\n');
     while (!terminal.quit) {
-      const action = await terminal.read({ title: '工作线', markdown: true, text: `# ${workline.title}\n\n${workline.summary}\n\n## 当前停在\n\n${workline.currentStop}\n\n## 可能变化 · AI 判断，尚未采纳\n\n${workline.possibleChange}\n\n## 参与情况\n\n${participation}\n\n来源：${workline.evidenceIds.length} 项\n版本：${view.index.revision}${view.mode === 'stale' ? '\n来源有变化；当前阅读已保存版本。' : ''}`,
-        position, actions: { d: options.readOnly ? '阅读已存深读' : '深读', s: '来源', e: '导出' } });
+      const action = await terminal.read({ title: '工作线', markdown: true, text: `# ${workline.title}\n\n${sourceSummary(workline)}\n\n${workline.summary}\n\n## 当前停在\n\n${workline.currentStop}\n\n## 可能变化 · AI 判断，尚未采纳\n\n${workline.possibleChange}\n\n## 参与情况\n\n${participation}\n\n来源：${workline.evidenceIds.length} 项\n版本：${view.index.revision}${view.mode === 'stale' ? '\n来源有变化；当前阅读已保存版本。' : ''}`,
+        position, note: jumpNotice, actions: { o: '直达会话', d: options.readOnly ? '阅读已存深读' : '深读', s: '来源', e: '导出' } });
       if (!action) return;
+      if (action === 'o') await jump(worklineSessions(view, workline));
       if (action === 's') await sources(workline);
       if (action === 'e') await exportView();
       if (action === 'd') {
@@ -151,7 +211,7 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
         if (saved?.dossier) {
           view = saved;
           const d = saved.dossier.content;
-          const text = [`# ${d.title}`, ...[['priorContext', '之前的背景'], ['whatHappened', '发生了什么'], ['possibleChange', '可能的变化 · 尚未采纳'], ['falsifiableObservation', '如何验证'], ['humanQuestion', '留给你的问题']].map(([key, label]) => `## ${label}\n\n${d[key]}`),
+          const text = [`# ${d.title}`, sourceSummary(workline), ...[['priorContext', '之前的背景'], ['whatHappened', '发生了什么'], ['possibleChange', '可能的变化 · 尚未采纳'], ['falsifiableObservation', '如何验证'], ['humanQuestion', '留给你的问题']].map(([key, label]) => `## ${label}\n\n${d[key]}`),
             ...[['supportingEvidence', '支持证据'], ['opposingEvidence', '相反证据']].filter(([key]) => d[key].length).map(([key, label]) => `## ${label}\n\n${d[key].map(e => `${e.claim}\n[${e.evidenceIds.join(', ')}]`).join('\n\n')}`),
             ...(d.gaps.length ? [`## 证据缺口\n\n${d.gaps.join('\n')}`] : []),
             ...(saved.dossier.validation.critiqueIssues.length ? [`## 核查提出的问题\n\n${saved.dossier.validation.critiqueIssues.join('\n')}\n\n最终结论仍需对照原文判断。`] : [])
@@ -159,7 +219,8 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
           const position = {};
           let key;
           do {
-            key = await terminal.read({ title: '工作线 / 深读', markdown: true, text, position, actions: { s: '来源', e: '导出' } });
+            key = await terminal.read({ title: '工作线 / 深读', markdown: true, text, position, note: jumpNotice, actions: { o: '直达会话', s: '来源', e: '导出' } });
+            if (key === 'o') await jump(worklineSessions(view, workline));
             if (key === 's') await sources(workline);
             if (key === 'e') await exportView();
           } while (key && !terminal.quit);
@@ -239,7 +300,7 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
     }
   }
 
-  const help = '在终端里，读懂和 Agent 一起推进的工作。\n\n基本操作\n↑↓、j / k 或 Ctrl-N/P 移动，Enter 打开，Esc 返回，q 或 Ctrl-C 退出。列表按 / 搜索，数字 1–9 可直接打开对应项。\n\n长文阅读\n↑↓、j / k 或 Ctrl-N/P 逐行滚动。Ctrl-F/B 整页翻动，Ctrl-D/U 半页翻动；Emacs 可用 Ctrl-V / Alt-V。PageDown/Up 同样可用，Space 保留向下翻页。g / G 或 Home / End 跳转首尾。工作线中 d 深读，s 查看来源，e 导出。\n\n模型调用\n浏览和切换范围只读取会话与已保存结果。只有选择生成简报、重新整理或首次深读才调用模型并使用额度。进度页按 Esc 取消；已保存的结果仍保留。\n\n来源与版本\n来源按冻结范围校验后打开。工作线选择绑定到看到的版本；列表变化时会提示重新选择。\n\n脚本接口\nagent-note brief --read-only --format json\nagent-note brief --date YYYY-MM-DD --source codex\nagent-note ui --source claude\n\n数据\n来源偏好保存在 UI 设置中。日期与项目只影响本次浏览。Provider 的登录和模型默认值由宿主机配置管理。';
+  const help = '在终端里，读懂和 Agent 一起推进的工作。\n\n基本操作\n↑↓、j / k 或 Ctrl-N/P 移动，Enter 打开，Esc 返回，q 或 Ctrl-C 退出。列表按 / 搜索，数字 1–9 可直接打开对应项。\n\n长文阅读\n↑↓、j / k 或 Ctrl-N/P 逐行滚动。Ctrl-F/B 整页翻动，Ctrl-D/U 半页翻动；Emacs 可用 Ctrl-V / Alt-V。PageDown/Up 同样可用，Space 保留向下翻页。g / G 或 Home / End 跳转首尾。工作线中 o 直达会话，d 深读，s 查看来源，e 导出。来源列表 Enter 阅读原文、o 直达；多个会话先选择。直达只切换现有窗口，状态不明时不会另开 CLI 进程。\n\n模型调用\n浏览和切换范围只读取会话与已保存结果。只有选择生成简报、重新整理或首次深读才调用模型并使用额度。进度页按 Esc 取消；已保存的结果仍保留。\n\n来源与版本\n来源按冻结范围校验后打开。工作线选择绑定到看到的版本；列表变化时会提示重新选择。\n\n脚本接口\nagent-note brief --read-only --format json\nagent-note brief --date YYYY-MM-DD --source codex\nagent-note ui --source claude\n\n数据\n来源偏好保存在 UI 设置中。日期与项目只影响本次浏览。Provider 的登录和模型默认值由宿主机配置管理。';
 
   const updateController = new AbortController();
   let updateStatus = process.env.AGENT_NOTE_NO_UPDATE_CHECK === '1' ? '自动检查已关闭' : '正在后台检查更新…';
