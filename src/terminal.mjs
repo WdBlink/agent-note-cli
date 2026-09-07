@@ -2,6 +2,7 @@ import { emitKeypressEvents } from 'node:readline';
 import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { clean } from './presentation.mjs';
+import { renderNotebook } from './notebook-pixels.mjs';
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 const segments = text => Array.from(segmenter.segment(clean(text).replace(/\t/g, '    ')), s => s.segment);
@@ -80,12 +81,12 @@ function paint(line, columns, color) {
   }).join('');
 }
 
-export function frame({ columns = 80, rows = 24, color = false, title = '首页', context = '', body = [], footer = '', note = '', brandImage = false }) {
+export function frame({ columns = 80, rows = 24, color = false, title = '首页', context = '', body = [], footer = '', note = '', brandArtwork = false }) {
   const inset = insetFor(columns);
   const available = Math.max(1, columns - inset * 2 - 1);
   const rule = '─'.repeat(available);
-  const header = [row(''), joined(row(brandImage ? '      AGENT NOTE' : '▤ AGENT NOTE', 'strong'), row(`    /    ${title}`, 'accent')),
-    row(`${brandImage ? '      ' : ''}${context}`, 'muted'), row(rule, 'rule')];
+  const header = [row(''), joined(row(brandArtwork ? '      AGENT NOTE' : '▤ AGENT NOTE', 'strong'), row(`    /    ${title}`, 'accent')),
+    row(`${brandArtwork ? '      ' : ''}${context}`, 'muted'), row(rule, 'rule')];
   const count = Math.max(0, rows - header.length - 4);
   const content = body.slice(0, count).map(line => typeof line === 'string' ? row(line) : line);
   while (content.length < count) content.push(row(''));
@@ -102,15 +103,16 @@ function navigation(key, pageSize) {
 }
 
 export class Terminal {
-  constructor({ input = process.stdin, output = process.stdout, signals = process } = {}) {
+  constructor({ input = process.stdin, output = process.stdout, signals = process, color = 'auto' } = {}) {
     this.input = input;
     this.output = output;
     this.signals = signals;
-    this.color = process.env.NO_COLOR !== undefined || process.env.TERM === 'dumb' ? false
+    this.color = color === 'never' || (color === 'auto' && Boolean(process.env.NO_COLOR)) || process.env.TERM === 'dumb' ? false
       : /truecolor|24bit/.test(process.env.COLORTERM ?? '') ? true : '256';
+    const program = process.env.TERM_PROGRAM;
     this.graphics = !this.color || process.env.TMUX || process.env.STY ? null
-      : ['ghostty', 'kitty', 'otty'].includes(process.env.TERM_PROGRAM) || process.env.TERM === 'xterm-kitty' ? 'kitty'
-        : ['iTerm.app', 'WezTerm'].includes(process.env.TERM_PROGRAM) ? 'iterm' : null;
+      : ['ghostty', 'kitty', 'otty'].includes(program) || (!program && process.env.TERM === 'xterm-kitty') ? 'kitty'
+        : ['iTerm.app', 'WezTerm'].includes(program) ? 'iterm' : null;
     if (this.graphics) this.color = true;
     this.quit = false;
     this.context = '';
@@ -177,18 +179,22 @@ export class Terminal {
   get capacity() { return Math.max(1, this.rows - 8); }
   get contentWidth() { return Math.max(1, this.columns - insetFor(this.columns) * 2 - 1); }
   // Artwork is reserved for brief transitions and longer waits; ordinary pages use a header mark.
-  withArtwork(screen, asset) {
-    if (!this.graphics || !this.color || this.columns < 80 || this.rows < 22) return screen;
+  withArtwork(screen, asset, writingElapsed) {
+    if (this.columns < 80 || this.rows < 22) return screen;
     const closed = asset !== 'notebook-ajar' && asset !== 'notebook-open';
     return { ...screen,
       body: screen.body.map(line => ({ ...(typeof line === 'string' ? row(line) : line), columns: this.contentWidth - 30 })),
-      picture: { asset, row: closed ? 8 : 6, column: insetFor(this.columns) + this.contentWidth - 25 + (closed ? 3 : 0),
-        columns: closed ? 18 : 24, rows: closed ? 9 : 12 }
+      ...(this.graphics && this.color ? {
+        picture: { asset, row: closed ? 8 : 6, column: insetFor(this.columns) + this.contentWidth - 25 + (closed ? 3 : 0),
+          columns: closed ? 18 : 24, rows: closed ? 9 : 12 }
+      } : {
+        pixelArt: { asset, row: 6, column: insetFor(this.columns) + this.contentWidth - 26, writingElapsed }
+      })
     };
   }
 
   async transition(closing = false) {
-    if (!this.graphics || !this.color || this.columns < 80 || this.rows < 22 || this.interrupted || (!closing && this.keys.length)) return;
+    if (this.columns < 80 || this.rows < 22 || this.interrupted || (!closing && this.keys.length)) return;
     this.transitionAbort = new AbortController();
     const signal = this.transitionAbort.signal;
     try {
@@ -211,11 +217,24 @@ export class Terminal {
     const screen = this.columns < 24 || this.rows < 12
       ? { title: '窗口较小', body: ['请放大到至少 24 × 12。'], footer: 'Ctrl-C 退出' }
       : this.renderScreen();
-    const brandImage = this.color && this.graphics && this.columns >= 60 && this.rows >= 16;
-    const picture = this.color && this.graphics && (screen.picture || (brandImage ? {
+    const brandArtwork = this.columns >= 60 && this.rows >= 16;
+    const mark = { asset: 'mark', row: 2, column: insetFor(this.columns) + 1 };
+    const picture = this.color && this.graphics && (screen.picture || (brandArtwork ? {
       asset: 'notebook', row: 2, column: insetFor(this.columns) + 1, columns: 4, rows: 2
     } : undefined));
-    const lines = frame({ columns: this.columns, rows: this.rows, color: this.color, context: this.context, brandImage, ...screen }).split('\r\n');
+    const lines = frame({ columns: this.columns, rows: this.rows, color: this.color, context: this.context, brandArtwork, ...screen }).split('\r\n');
+    if (!picture) {
+      for (const art of [brandArtwork && mark, screen.pixelArt].filter(Boolean)) {
+        const pixels = renderNotebook(art.asset, this.color, background(this.color), art.writingElapsed);
+        for (const [y, pixelRow] of pixels.entries()) {
+          const i = art.row - 1 + y;
+          if (i >= lines.length) break;
+          const end = Math.max(width(lines[i]), art.column - 1 + width(pixelRow));
+          // Paint into reserved cells, then return past the text before erase-to-end.
+          lines[i] += `\x1b[${art.column}G${pixelRow}\x1b[${end + 1}G`;
+        }
+      }
+    }
     const size = `${this.columns}:${this.rows}`;
     const pictureKey = picture ? JSON.stringify(picture) : undefined;
     let output = '';
@@ -394,7 +413,7 @@ export class Terminal {
           row(`  ${p.sessionId ?? ({ ready: '已完成', failed: '未完成', excluded: '已排除', running: signal.aborted ? '正在停止' : '进行中', pending: '等待' }[p.status] ?? '')}`, 'muted')));
       }
       const screen = { title, body, note: `已用 ${Math.floor(elapsed / 1000)} 秒 · ${deep ? '分析 → 核查 → 成文' : '保留已有内容'}`, footer: 'Esc 取消并返回 · q 取消并退出' };
-      return elapsed < 600 ? screen : this.withArtwork(screen, signal.aborted ? 'notebook' : notebookFrames[Math.min(notebookFrames.length - 1, Math.floor((elapsed - 600) / 140))]);
+      return elapsed < 600 ? screen : this.withArtwork(screen, signal.aborted ? 'notebook' : notebookFrames[Math.min(notebookFrames.length - 1, Math.floor((elapsed - 600) / 140))], elapsed - 1160);
     };
     let shown = false;
     const timer = setInterval(() => { shown = true; this.show(render); }, 160);

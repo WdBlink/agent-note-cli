@@ -14,7 +14,7 @@ const ref = index => index && ({ artifactId: index.artifactId, revision: index.r
 const shiftDate = (date, days) => { const d = new Date(`${date}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); };
 const option = (id, label, hint, preview) => ({ id, label, hint, preview });
 
-export async function runInteractive(initialOptions = {}, { terminal = new Terminal(), service = brief, sourceReader = readSource, updateChecker = checkForUpdate } = {}) {
+export async function runInteractive(initialOptions = {}, { terminal = new Terminal({ color: initialOptions.color }), service = brief, sourceReader = readSource, updateChecker = checkForUpdate } = {}) {
   const options = { ...initialOptions, date: initialOptions.date ?? today(), workline: undefined, refresh: false };
   const preferenceFile = path.join(options.dataDir ?? path.join(os.homedir(), '.local/share/agent-note'), 'ui-preferences.json');
   let preferences = {}, preferenceError;

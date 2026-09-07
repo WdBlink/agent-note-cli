@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/assets/notebook.png" width="112" alt="Agent Note 像素笔记本 Logo">
+  <img src="docs/assets/notebook-logo.png" width="112" alt="Agent Note 像素笔记本 Logo">
 </p>
 
 <h1 align="center">Agent Note CLI</h1>
@@ -24,7 +24,7 @@
 
 ![Agent Note CLI 交互终端：进入工作线、深读、滚动并返回](docs/assets/agent-note-preview.gif)
 
-这段约 20 秒的录屏展示完整路径：进入工作线、打开已存深读、上下滚动，再返回列表。画面使用合成会话，不调用模型。
+这段录屏来自 iTerm2 中的 v0.4.0：展示像素笔记本、首页、工作线、已存深读和返回操作。使用合成会话与预存的测试结果，录屏过程只读、不调用模型。
 
 ## 它解决什么
 
@@ -104,7 +104,9 @@ agent-note ui --source codex
 
 宽终端会显示选中项预览，窄终端自动切成单列。阅读位置和列表选择会在返回后保留。按 `?` 可在应用内查看完整键位。
 
-Otty、Ghostty、Kitty、iTerm2 和 WezTerm 会显示原生笔记本图稿；其他终端保留轻量文字标记。`NO_COLOR=1` 关闭颜色，`TERM=dumb` 或非 TTY 自动使用普通命令模式。
+图稿默认图片优先：Otty、Ghostty、Kitty、iTerm2 和 WezTerm 使用原生 PNG；未识别图片协议或图片链路不可用时，自动回退到字符像素笔记本。窄窗口保留轻量文字标记。`NO_COLOR=1` 关闭颜色，`TERM=dumb` 或非 TTY 自动使用普通命令模式。v0.5.0 起提供 `--color auto|always|never`。
+
+如果 iTerm2 只显示无颜色文字，先试 `env -u NO_COLOR agent-note ui`，排除从父进程继承的禁色设置。配色与图片协议的区别、窗口要求见[终端显示排错](docs/usage.md#配色和图稿没有出现)。
 
 ## 命令
 

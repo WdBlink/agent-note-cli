@@ -1,6 +1,6 @@
 {
   "name": "agent-note-cli",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Turn local AI coding sessions into a clear daily work brief.",
   "type": "module",
   "bin": {

@@ -4,7 +4,7 @@
 
 `notebook-open-source.png` and `notebook-ajar-source.png` were edited with the built-in image generation tool using the closed notebook as the visual reference. Their matching `notebook-open.png` and `notebook-ajar.png` files are 256 × 256 runtime exports made with macOS `sips`.
 
-Five states play once on entry (780 ms) and normal exit (500 ms): closed → strap lifted → strap slipped aside → half open → open, reversed on exit. Any key skips; signals bypass the closing sequence. The two strap states share the closed book's exact placement. Ordinary pages show the closed notebook at 4 columns × 2 rows beside the title. Operations lasting over 600 ms use the same opening sequence, up to 24 columns × 12 rows; progress animates independently. Small or unsupported terminals keep the text mark.
+Five states play once on entry (780 ms) and normal exit (500 ms): closed → strap lifted → strap slipped aside → half open → open, reversed on exit. Any key skips; signals bypass the closing sequence. The two strap states share the closed book's exact placement. Ordinary pages show the closed notebook at 4 columns × 2 rows beside the title. Operations lasting over 600 ms use the same opening sequence, up to 24 columns × 12 rows; progress animates independently. Terminals without an enabled image transport use the character sprites in `../notebook-pixels.mjs`, including the writing loop while busy. Small windows keep the text mark. Native PNGs remain the preferred artwork.
 
 `notebook-strap-lift-source.png` and `notebook-strap-free-source.png` were edited from the closed reference with the built-in image generation tool. Matching runtime PNGs are 128 × 128 `sips` exports.
 

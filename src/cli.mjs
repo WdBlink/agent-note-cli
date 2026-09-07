@@ -24,6 +24,7 @@ const help = `Agent Note CLI · 与 Agent Notebook 相同的 Today 后端
   --claude-model NAME                 覆盖 Claude 模型
   --data-dir PATH                    CLI 数据目录
   --format text|markdown|json         输出格式
+  --color auto|always|never           TUI 配色，always 覆盖 NO_COLOR，默认 auto
   --help / --version                  帮助 / 版本
 
 首次生成及刷新使用与 App 相同的模型调用，会发送会话证据并消耗你的额度。
@@ -37,7 +38,7 @@ async function main() {
     date: { type: 'string' }, timezone: { type: 'string' }, project: { type: 'string' }, source: { type: 'string' },
     root: { type: 'string', multiple: true }, settings: { type: 'string' }, 'data-dir': { type: 'string' },
     'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
-    format: { type: 'string', default: 'text' }, workline: { type: 'string' },
+    format: { type: 'string', default: 'text' }, workline: { type: 'string' }, color: { type: 'string', default: 'auto' },
     'read-only': { type: 'boolean' }, refresh: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' }
   } });
@@ -45,6 +46,7 @@ async function main() {
   if (v.version) return void process.stdout.write(JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url))).version + '\n');
   if (positionals.length > 1 || (positionals[0] && !['brief', 'ui'].includes(positionals[0]))) throw new Error('未知命令。请运行 agent-note --help。');
   if (!['text', 'markdown', 'json'].includes(v.format)) throw new Error('--format 必须为 text、markdown 或 json。');
+  if (!['auto', 'always', 'never'].includes(v.color)) throw new Error('--color 必须为 auto、always 或 never。');
   if (v.source && !['all', 'codex', 'claude', 'copilot'].includes(v.source)) throw new Error('--source 必须为 all、codex、claude 或 copilot。');
   if (v['read-only'] && v.refresh) throw new Error('--read-only 与 --refresh 不能同时使用。');
   if (v.timezone) {
@@ -74,7 +76,7 @@ async function main() {
   };
   if (interactive) {
     const { runInteractive } = await import('./interactive.mjs');
-    return runInteractive(options);
+    return runInteractive({ ...options, color: v.color });
   }
   const controller = new AbortController();
   const stop = () => { process.exitCode = 130; controller.abort(); };

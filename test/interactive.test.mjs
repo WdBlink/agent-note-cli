@@ -7,6 +7,7 @@ import { PassThrough, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { setImmediate as tick } from 'node:timers/promises';
 import { Terminal, frame, width, fit, wrap } from '../src/terminal.mjs';
+import { renderNotebook } from '../src/notebook-pixels.mjs';
 import { runInteractive as runApp } from '../src/interactive.mjs';
 import { version } from '../src/updates.mjs';
 import { brief, readSource } from '../src/service.mjs';
@@ -363,7 +364,7 @@ test('warm theme keeps focus out of the preview, formats reading and animates on
   try {
     const menu = f.terminal.menu({ title: '首页', items: [{ id: 'read', label: '工作脉络', preview: '证据预览' }] });
     const screen = f.text();
-    assert.ok(screen.includes('▤ AGENT NOTE') && screen.includes('证据预览'), 'ordinary terminals keep the compact book mark and text preview');
+    assert.ok(screen.includes('AGENT NOTE') && screen.includes('证据预览') && /[▀▄█]/u.test(screen), 'ordinary terminals keep the compact pixel mark and text preview');
     assert.ok(screen.includes('\x1b[48;2;28;25;22m'), 'warm background is explicit');
     const selection = screen.split('\x1b[48;2;66;48;33m')[1].split('\x1b[0m')[0];
     assert.ok(selection.includes('工作脉络') && !selection.includes('证据预览'), 'selection resets before preview');
@@ -434,8 +435,47 @@ test('Otty enables native images from its real terminal identifier', async t => 
     await menu;
   } finally { terminal.close(); }
   assert.ok(f.text().includes(`a=d,d=I,i=${process.pid}`));
-  process.env.NO_COLOR = '';
+  process.env.NO_COLOR = '1';
   assert.equal(new Terminal().graphics, null, 'explicit color opt-out still applies');
+});
+
+test('terminal color policy respects nonempty NO_COLOR and explicit overrides across native protocols', t => {
+  const names = ['TERM', 'TERM_PROGRAM', 'COLORTERM', 'NO_COLOR', 'TMUX', 'STY'];
+  const saved = names.map(name => [name, process.env[name]]);
+  t.after(() => { for (const [name, value] of saved) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
+  for (const name of names) delete process.env[name];
+  process.env.TERM = 'xterm-256color';
+  for (const [program, protocol] of [['iTerm.app', 'iterm'], ['WezTerm', 'iterm'], ['ghostty', 'kitty'], ['kitty', 'kitty'], ['otty', 'kitty'], ['Apple_Terminal', null], ['vscode', null], ['Alacritty', null]]) {
+    process.env.TERM_PROGRAM = program;
+    for (const noColor of [undefined, '', '1', '0']) {
+      if (noColor === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = noColor;
+      const auto = new Terminal();
+      assert.equal(Boolean(auto.color), !noColor, `${program}: NO_COLOR=${noColor}`);
+      assert.equal(auto.graphics, noColor ? null : protocol);
+      const forced = new Terminal({ color: 'always' });
+      assert.ok(forced.color);
+      assert.equal(forced.graphics, protocol);
+      assert.equal(new Terminal({ color: 'never' }).color, false);
+      assert.equal(new Terminal({ color: 'never' }).graphics, null);
+    }
+  }
+  process.env.TERM_PROGRAM = 'iTerm.app';
+  for (const multiplex of ['TMUX', 'STY']) {
+    process.env[multiplex] = 'active';
+    const terminal = new Terminal({ color: 'always' });
+    assert.ok(terminal.color);
+    assert.equal(terminal.graphics, null, 'color override must not bypass image transport restrictions');
+    delete process.env[multiplex];
+  }
+  process.env.TERM = 'dumb';
+  assert.equal(new Terminal({ color: 'always' }).color, false);
+  process.env.TERM = 'xterm-kitty';
+  process.env.TERM_PROGRAM = 'vscode';
+  assert.equal(new Terminal({ color: 'always' }).graphics, null, 'an inherited TERM must not override the current terminal identity');
+  process.env.TERM_PROGRAM = 'iTerm.app';
+  assert.equal(new Terminal({ color: 'always' }).graphics, 'iterm');
+  delete process.env.TERM_PROGRAM;
+  assert.equal(new Terminal({ color: 'always' }).graphics, 'kitty');
 });
 
 test('native image protocols transmit the bundled PNG and clean up on navigation', async t => {
@@ -465,6 +505,7 @@ test('native image protocols transmit the bundled PNG and clean up on navigation
       f.input.write('\r');
       await menu;
       f.terminal.show(() => f.terminal.withArtwork({ title: '欢迎', body: ['翻开今天的工作。'] }, 'notebook-open'));
+      assert.equal(f.terminal.renderScreen().pixelArt, undefined, 'native images take priority over character artwork');
       const offset = f.text().length;
       const reading = f.terminal.read({ title: '深读', text: '已打开正文' });
       const next = f.text().slice(offset);
@@ -475,6 +516,69 @@ test('native image protocols transmit the bundled PNG and clean up on navigation
   }
   const limited = frame({ color: '256', title: '首页' });
   assert.ok(limited.includes('\x1b[38;5;187m') && !limited.includes('\x1b[38;5;224m'), 'warm title does not map to pink');
+});
+
+test('terminals without images render pixel artwork in color or one ink and clear it on resize', async t => {
+  for (const color of [false, '256', true]) {
+    const f = tty(t);
+    f.terminal.color = color;
+    f.terminal.start();
+    try {
+      let elapsed = 0;
+      f.terminal.show(() => f.terminal.withArtwork({ title: '整理', context: '保留来源', body: ['正文'.repeat(80)] }, 'notebook-open', elapsed));
+      const screen = f.terminal.renderScreen();
+      assert.equal(screen.picture, undefined);
+      assert.equal(screen.pixelArt.asset, 'notebook-open');
+      assert.ok(screen.body[0].columns + 3 < screen.pixelArt.column, 'reserve space between text and the book');
+      assert.ok(renderNotebook('notebook-open', color, '', elapsed).every(line => width(line) === 26));
+      const initial = f.text();
+      assert.match(initial, /[▀▄█]/u);
+      assert.ok(!/\x1b(?:\]|P|_)/.test(initial), 'no image protocol is sent');
+      if (!color) assert.ok(!/\x1b\[(?:38|48);/.test(initial), 'one-ink fallback respects NO_COLOR');
+      const unchanged = f.text().length;
+      f.terminal.draw();
+      assert.equal(f.text().length, unchanged, 'static pixels do not redraw');
+      elapsed = 540;
+      f.terminal.draw();
+      const moved = f.text().slice(unchanged);
+      assert.match(moved, /[▀▄█]/u);
+      assert.ok(!moved.includes('AGENT NOTE') && !moved.includes('\x1b[2J'), 'writing updates only affected rows');
+      f.output.columns = 38;
+      const beforeResize = f.text().length;
+      f.output.emit('resize');
+      assert.equal(f.terminal.renderScreen().pixelArt, undefined);
+      const narrow = f.text().slice(beforeResize);
+      assert.ok(narrow.includes('\x1b[2J') && narrow.includes('▤ AGENT NOTE'));
+      assert.ok(!/[▀▄█]/u.test(narrow), 'narrow windows clear the large pixels and preserve text');
+    } finally { f.terminal.close(); }
+  }
+});
+
+test('pixel fallback opens on entry and writes during slow work without reopening', async t => {
+  const f = tty(t);
+  f.terminal.start();
+  let finish;
+  try {
+    const opening = f.terminal.transition();
+    assert.equal(f.terminal.renderScreen().pixelArt.asset, 'notebook');
+    f.input.write('x');
+    await opening;
+    assert.equal((await f.terminal.next()).text, 'x');
+    const work = f.terminal.busy('准备深读', () => new Promise(resolve => { finish = resolve; }));
+    await new Promise(resolve => setTimeout(resolve, 1400));
+    const first = f.terminal.renderScreen().pixelArt;
+    assert.equal(first.asset, 'notebook-open');
+    assert.ok(first.writingElapsed >= 0);
+    await new Promise(resolve => setTimeout(resolve, 240));
+    const second = f.terminal.renderScreen().pixelArt;
+    assert.equal(second.asset, 'notebook-open');
+    assert.notDeepEqual(renderNotebook(first.asset, false, '', first.writingElapsed), renderNotebook(second.asset, false, '', second.writingElapsed));
+    finish(true);
+    assert.equal(await work, true);
+    const stopped = f.text().length;
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(f.text().length, stopped, 'pixel animation stops with the operation');
+  } finally { finish?.(true); f.terminal.close(); }
 });
 
 test('book artwork opens and closes once, skips promptly, and stays small for quick operations', async t => {

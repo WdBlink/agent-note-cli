@@ -18,7 +18,30 @@
 
 窗口最小为 24 列 × 12 行；100 列以上的菜单可显示右侧预览。`NO_COLOR=1` 保留文字选中标记并关闭颜色。`TERM=dumb` 或非 TTY 不启动交互界面，请使用普通 `brief` 命令。
 
-界面采用暖色深底与奶油色正文。Otty、Ghostty、Kitty、iTerm2 和 WezTerm 自动显示原生笔记本图稿：欢迎时先揭开绑带再展开，正常退出时合上并扣回绑带，可按任意键跳过；Ctrl-C / SIGTERM 直接退出。日常菜单和阅读页只在标题旁显示 4 列 × 2 行的小图。超过 0.6 秒的等待才显示较大的打开状态，最多 24 列 × 12 行，进度条独立更新。窄窗口、其他终端、tmux/screen 或 NO_COLOR 环境保留文字标记。真彩色终端使用完整配色，其他终端使用 256 色近似。长文限制行宽并区分章节标题。深读按实际阶段更新，移动光标表示仍在处理，不代表完成百分比；页面只重绘发生变化的行。
+### 配色和图稿没有出现
+
+文字菜单、配色和 PNG 图稿使用不同的终端能力；当前应用在禁色时也停用彩色图稿。菜单可以操作但没有暖色配色时，先检查启动环境；有配色但显示字符像素图稿时，再检查图片协议；只有 `▤` 标记时还需检查窗口大小。
+
+```sh
+printenv TERM TERM_PROGRAM COLORTERM NO_COLOR
+env -u NO_COLOR agent-note ui
+```
+
+`NO_COLOR` 可能从启动终端的父进程继承，包括 IDE、自动化工具和其他 shell。`env -u NO_COLOR` 只对这次启动移除它。`agent-note ui --color always` 可以覆盖继承的禁色设置，`--color never` 明确使用无颜色模式；默认 `auto` 仅在 `NO_COLOR` 非空时禁色。v0.5.0 起支持这些选项；此前 v0.4.0 会把空值 `NO_COLOR=` 也当作禁色，旧版本使用上面的 `env -u` 命令即可恢复。
+
+| 运行环境 | 当前应用选择的渲染方式 |
+| --- | --- |
+| iTerm2、WezTerm | ANSI 配色 + iTerm inline PNG 协议 |
+| Ghostty、Kitty、Otty | ANSI 配色 + Kitty PNG 协议 |
+| Apple Terminal、Alacritty、VS Code 集成终端及未识别的终端 | ANSI 配色 + 字符像素笔记本；当前应用未启用其图片传输 |
+| tmux / screen | ANSI 配色 + 字符像素笔记本；当前应用未实现图片透传 |
+| NO_COLOR 非空或 --color never | 单色字符像素笔记本 |
+
+图片优先、字符回退随 v0.5.0 发布。协议按终端环境标识识别，不保证自动发现所有终端的图形能力；未识别时安全回退。`--color always` 不会强制发送不受支持的图片协议。标题图稿要求至少 60 列 × 16 行，开合动画要求至少 80 列 × 22 行。窗口过小或经 SSH 丢失终端标识时仍可能只显示文字；不要通过伪造 `TERM_PROGRAM` 强行开启协议。
+
+兼容性依据：[iTerm2 图片协议](https://iterm2.com/3.5/documentation-images.html)、[WezTerm 图片协议](https://wezterm.org/imgcat.html)、[Kitty 图片协议](https://sw.kovidgoyal.net/kitty/graphics-protocol/)、[Ghostty 功能说明](https://ghostty.org/docs/features)及 [NO_COLOR 约定](https://no-color.org/)。2026-09-07 在本机 iTerm2 完成实际显示验证；其他分支使用环境矩阵和协议输出测试，未逐个安装终端实测。
+
+界面采用暖色深底与奶油色正文。Otty、Ghostty、Kitty、iTerm2 和 WezTerm 自动显示原生笔记本图稿：欢迎时先揭开绑带再展开，正常退出时合上并扣回绑带，可按任意键跳过；Ctrl-C / SIGTERM 直接退出。日常菜单和阅读页只在标题旁显示 4 列 × 2 行的小图。超过 0.6 秒的等待才显示较大的打开状态，图片最多 24 列 × 12 行，保持原图质感，进度条独立更新。图片不可用时使用同一套字符像素图稿：标题标记为 4 列 × 2 行，开合及等待图稿为 26 列 × 12 行，整理等待时显示笔的书写循环。字符回退也支持单色；窗口低于相应尺寸时保留文字标记和完整内容。真彩色终端使用完整配色，其他终端使用 256 色近似。长文限制行宽并区分章节标题。深读按实际阶段更新，移动光标表示仍在处理，不代表完成百分比；页面只重绘发生变化的行。
 
 来源偏好保存在数据目录下的 `ui-preferences.json`，仅用于交互应用。显式 `--source` 和 settings 中的来源配置优先；日期、项目只在当前浏览会话中生效。`brief` 脚本接口不读取 UI 偏好。
 

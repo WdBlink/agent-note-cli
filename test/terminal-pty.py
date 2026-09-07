@@ -18,13 +18,13 @@ repo = pathlib.Path(__file__).resolve().parents[1]
 
 
 class App:
-    def __init__(self, args):
+    def __init__(self, args, env=None):
         self.master, slave = pty.openpty()
         self.before = termios.tcgetattr(slave)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 28, 112, 0, 0))
         self.child = subprocess.Popen([shutil.which('node'), str(repo / 'src/cli.mjs'), 'ui', *args],
                                       stdin=slave, stdout=slave, stderr=slave, cwd=repo,
-                                      env={**os.environ, 'TERM': 'xterm-256color', 'NO_COLOR': '1', 'AGENT_NOTE_NO_UPDATE_CHECK': '1'}, start_new_session=True)
+                                      env={**os.environ, 'TERM': 'xterm-256color', 'NO_COLOR': '1', 'AGENT_NOTE_NO_UPDATE_CHECK': '1', **(env or {})}, start_new_session=True)
         self.slave = slave
         self.buffer = b''
         self.cursor = 0
@@ -173,5 +173,19 @@ process.stdin.on('end', async () => {{
         assert app.child.wait(timeout=5) == 0
     finally:
         app.close()
+
+    app = App([*args, '--read-only', '--color', 'always'], {'TERM_PROGRAM': 'iTerm.app', 'TMUX': '', 'STY': ''})
+    try:
+        app.expect('\x1b]1337;File=inline=1;')
+        app.expect('/    首页')
+        assert b'\x1b[48;2;28;25;22m' in app.buffer, '--color always did not restore the TUI palette'
+        app.send('q')
+        app.expect('\x1b[?1049l')
+        assert app.child.wait(timeout=5) == 0
+    finally:
+        app.close()
+
+    invalid = subprocess.run([shutil.which('node'), str(repo / 'src/cli.mjs'), 'ui', '--color', 'invalid'], capture_output=True, text=True)
+    assert invalid.returncode == 1 and '--color 必须' in invalid.stderr
 
 print('PTY acceptance passed: generation, dossier, frozen source, back navigation, invalid date, cancellation, resize, Ctrl-C and terminal restoration.')
