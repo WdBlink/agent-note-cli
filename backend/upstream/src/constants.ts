@@ -13,7 +13,8 @@ export const COMMAND_OPEN_AGENT_WHITEBOARD = "open-agent-whiteboard";
 export const DEFAULT_SESSION_SCAN_ROOTS = [
   "~/.codex/sessions",
   "~/.codex/archived_sessions",
-  "~/.claude/projects"
+  "~/.claude/projects",
+  "~/.copilot/session-state"
 ];
 
 export const SESSION_PROVIDER_DEFINITIONS: ReadonlyArray<{
@@ -22,7 +23,8 @@ export const SESSION_PROVIDER_DEFINITIONS: ReadonlyArray<{
   description: string;
 }> = [
   { id: "codex", label: "Codex", description: "读取 ~/.codex 下的本机会话记录" },
-  { id: "claude", label: "Claude Code", description: "读取 ~/.claude/projects 下的本机会话记录" }
+  { id: "claude", label: "Claude Code", description: "读取 ~/.claude/projects 下的本机会话记录" },
+  { id: "copilot", label: "GitHub Copilot", description: "读取 ~/.copilot/session-state 下的 CLI 会话记录" }
 ];
 
 export const DEFAULT_SESSION_PROVIDERS: SessionProvider[] = SESSION_PROVIDER_DEFINITIONS.map(({ id }) => id);

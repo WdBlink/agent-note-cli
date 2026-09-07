@@ -18,6 +18,53 @@ const fsAdapter: RuntimeFileSystem = {
   realpath
 };
 
+test("JSON event metadata never becomes a title, and middle/event-only messages remain discoverable", () => {
+  const metadata = { timestamp: "2026-09-07T00:00:32.135Z", type: "session_meta", payload: { id: "session-1", cwd: "/tmp/project" } };
+  const file = "/tmp/codex/rollout-session-1.jsonl";
+  const extract = (text: string) => extractWorkSessionFromText(text, file, "codex", metadata.timestamp)!;
+  for (const text of [JSON.stringify(metadata), JSON.stringify(metadata, null, 2), JSON.stringify(metadata) + '\n{"type":']) {
+    assert.equal(extract(text).title, "rollout-session-1");
+    assert.doesNotMatch(extract(text).summary, /timestamp|session_meta/);
+  }
+  const records: unknown[] = [metadata, ...Array.from({ length: 2100 }, () => ({ type: "response_item", payload: { type: "function_call_output", output: "tool output" } }))];
+  records.splice(150, 0, { type: "event_msg", payload: { type: "user_message", message: "修复会话原文读取" } });
+  const text = records.map(record => JSON.stringify(record)).join('\n');
+  assert.equal(extract(text).title, "修复会话原文读取");
+  assert.equal(extract(text + '\n{"type":').id, "session-1");
+  assert.equal(extractWorkSessionFromText(JSON.stringify({ type: "user", message: { content: "没有显式 role 的 Claude 输入" } }), "/tmp/claude/session.jsonl", "claude", metadata.timestamp)?.title, "没有显式 role 的 Claude 输入");
+});
+
+test("Copilot discovery uses events.jsonl and canonical session.start identity and context", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "agent-notebook-copilot-"));
+  try {
+    const root = path.join(dir, ".copilot/session-state");
+    const sessionDir = path.join(root, "path-is-not-session-id");
+    await mkdir(sessionDir, { recursive: true });
+    const date = "2026-09-07";
+    const timestamp = new Date(`${date}T12:00:00`).toISOString();
+    const content = [
+      { type: "session.start", id: "event-id", timestamp, data: { sessionId: "copilot-session", context: { cwd: "/tmp/project", branch: "feature/copilot" } } },
+      { type: "user.message", timestamp, data: { content: "读取 Copilot 会话", source: "user", transformedContent: "hidden host instructions" } },
+      { type: "assistant.message", timestamp, data: { content: "已读取会话正文。" } }
+    ].map(record => JSON.stringify(record)).join('\n') + '\n';
+    await writeFile(path.join(sessionDir, "events.jsonl"), content);
+    await writeFile(path.join(sessionDir, "other.jsonl"), content);
+    await utimes(path.join(sessionDir, "events.jsonl"), new Date(timestamp), new Date(timestamp));
+    await utimes(path.join(sessionDir, "other.jsonl"), new Date(timestamp), new Date(timestamp));
+    const snapshot = await loadAgentWorkSnapshot(createEmptyData().settings, { date, homeDir: dir, providers: ["copilot"], fs: fsAdapter });
+    assert.equal(snapshot.sessions.length, 1);
+    const session = snapshot.sessions[0]!;
+    assert.equal(session.platform, "copilot");
+    assert.equal(session.id, "copilot-session");
+    assert.equal(session.title, "读取 Copilot 会话");
+    assert.equal(session.summary, "已读取会话正文。");
+    assert.equal(session.projectPath, "/tmp/project");
+    assert.equal(session.branch, "feature/copilot");
+    assert.equal(session.resumeHint, "copilot --resume=copilot-session");
+    assert.equal(session.transcriptCapture?.byteLength, Buffer.byteLength(content));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("extracts Codex JSONL sessions with resume hints", () => {
   const content = [
     JSON.stringify({
@@ -95,6 +142,7 @@ test("Codex archived sessions are completed and model summaries cannot reopen th
     JSON.stringify({ timestamp: "2026-07-21T04:00:00.000Z", type: "session_meta", payload: { id: "archived-id", cwd: root } }),
     JSON.stringify({ timestamp: "2026-07-21T04:01:00.000Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "归档这条会话" }] } })
   ].join("\n"));
+  await utimes(sessionPath, new Date("2026-07-21T04:01:00.000Z"), new Date("2026-07-21T04:01:00.000Z"));
   try {
     const settings = { ...createEmptyData().settings, sessionScanRoots: [archive], enabledSessionProviders: ["codex" as const] };
     const snapshot = await loadAgentWorkSnapshot(settings, {

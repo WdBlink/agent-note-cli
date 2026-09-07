@@ -39,6 +39,7 @@ const base = '\x1b[0m\x1b[48;2;28;25;22m\x1b[38;2;223;211;191m';
 const tones = {
   accent: '\x1b[38;2;215;158;104m', muted: '\x1b[38;2;166;157;142m',
   rule: '\x1b[38;2;89;75;60m', strong: '\x1b[1m\x1b[38;2;245;227;196m',
+  selectedHint: '\x1b[48;2;66;48;33m\x1b[38;2;200;182;155m',
   selected: '\x1b[48;2;66;48;33m\x1b[38;2;245;211;164m\x1b[1m',
   green: '\x1b[38;2;158;181;123m', warning: '\x1b[38;2;224;148;121m'
 };
@@ -82,7 +83,7 @@ function paint(line, columns, color) {
 export function frame({ columns = 80, rows = 24, color = false, title = '首页', context = '', body = [], footer = '', note = '', brandImage = false }) {
   const inset = insetFor(columns);
   const available = Math.max(1, columns - inset * 2 - 1);
-  const rule = '─'.repeat(Math.min(available, 104));
+  const rule = '─'.repeat(available);
   const header = [row(''), joined(row(brandImage ? '      AGENT NOTE' : '▤ AGENT NOTE', 'strong'), row(`    /    ${title}`, 'accent')),
     row(`${brandImage ? '      ' : ''}${context}`, 'muted'), row(rule, 'rule')];
   const count = Math.max(0, rows - header.length - 4);
@@ -90,6 +91,14 @@ export function frame({ columns = 80, rows = 24, color = false, title = '首页'
   while (content.length < count) content.push(row(''));
   const all = [...header, ...content, row(rule, 'rule'), row(note, 'accent'), row(footer, 'muted')];
   return all.slice(0, Math.max(1, rows - 1)).map(line => background(color) + ' '.repeat(inset) + paint(line, available, color)).join('\r\n');
+}
+
+function navigation(key, pageSize) {
+  if (key.ctrl) return ({ n: 1, p: -1, f: pageSize, b: -pageSize, d: Math.max(1, Math.floor(pageSize / 2)), u: -Math.max(1, Math.floor(pageSize / 2)), v: pageSize })[key.name];
+  if (key.meta) return key.name === 'v' ? -pageSize : undefined;
+  return ({ down: 1, up: -1, pagedown: pageSize, pageup: -pageSize, space: pageSize })[key.name]
+    ?? ({ j: 1, k: -1, g: -Infinity, G: Infinity })[key.text]
+    ?? ({ home: -Infinity, end: Infinity })[key.name];
 }
 
 export class Terminal {
@@ -264,20 +273,22 @@ export class Terminal {
       for (const [i, item] of list.slice(start, start + pageSize).entries()) {
         const active = start + i === selected;
         menuRows.push(row(`${active ? '▎' : ' '} ${String(start + i + 1).padStart(2, '0')}  ${item.label}`, active ? 'selected' : 'strong'));
-        menuRows.push(row(`      ${item.hint ?? ''}`, 'muted'));
+        menuRows.push(row(`      ${item.hint ?? ''}`, active ? 'selectedHint' : 'muted'));
       }
       if (!list.length) menuRows.push(row('没有匹配项。按 Esc 清除搜索。', 'muted'));
       const rightWidth = this.contentWidth - leftWidth - 4;
       const preview = split ? wrap(list[selected].preview, rightWidth).map((text, i) => row(text, i === 0 ? 'accent' : undefined)) : [];
       for (let i = 0; i < Math.max(menuRows.length, preview.length); i++) {
         const line = menuRows[i] ?? row('');
-        const left = fit(line.text, leftWidth);
-        body.push(split ? joined(row(left + ' '.repeat(Math.max(0, leftWidth - width(left))), line.tone),
-          row(' │  ', 'rule'), ...(preview[i]?.parts ?? [preview[i] ?? row('')])) : row(left, line.tone));
+        const text = clean(line.text).replace(/[\r\n]+/g, ' ');
+        const left = width(text) > leftWidth ? fit(text, leftWidth - 1) + '…' : text;
+        const padded = left + ' '.repeat(Math.max(0, leftWidth - width(left)));
+        body.push(split ? joined(row(padded, line.tone),
+          row(' │  ', 'rule'), ...(preview[i]?.parts ?? [preview[i] ?? row('')])) : row(padded, line.tone));
       }
       return { title, body,
         note: searching || query ? `搜索 / ${query}▏   ${list.length} 项` : note || (list.length ? `${selected + 1} / ${list.length}` : ''),
-        footer: searching ? '输入筛选 · Enter 完成 · Esc 清除' : this.columns < 60 ? '↑↓  Enter  Esc返回  q退出' : `↑↓/jk 移动  Enter打开${searchable ? '  /搜索' : ''}  Esc返回  q退出` };
+        footer: searching ? '输入筛选 · Enter 完成 · Esc 清除' : this.columns < 60 ? '↑↓  Enter  Esc返回  q退出' : `↑↓/jk/C-n,p 移动  Enter打开${searchable ? '  /搜索' : ''}  Esc返回  q退出` };
     };
     this.show(render);
     while (!this.quit) {
@@ -291,12 +302,10 @@ export class Terminal {
         selected = 0;
       } else if (key.text === 'q') { this.stop(); return null; }
       else if (key.text === '/' && searchable) searching = true;
-      else if (key.name === 'up' || key.text === 'k') selected--;
-      else if (key.name === 'down' || key.text === 'j') selected++;
-      else if (key.name === 'home') selected = 0;
-      else if (key.name === 'end') selected = matches().length - 1;
-      else if (key.name === 'pageup') selected -= Math.max(1, Math.floor((this.capacity - 2) / 2));
-      else if (key.name === 'pagedown') selected += Math.max(1, Math.floor((this.capacity - 2) / 2));
+      else if (navigation(key, Math.max(1, Math.floor((this.capacity - 2) / 2))) !== undefined) {
+        const next = selected + navigation(key, Math.max(1, Math.floor((this.capacity - 2) / 2)));
+        selected = Math.max(0, Math.min(next, matches().length - 1));
+      }
       else if (key.name === 'return') { const item = matches()[selected]; if (item) return item; }
       else if (/^[1-9]$/.test(key.text ?? '') && matches()[Number(key.text) - 1]) return matches()[Number(key.text) - 1];
       this.draw();
@@ -321,20 +330,21 @@ export class Terminal {
       scroll = Math.max(0, Math.min(scroll, lines.length - this.capacity));
       position.scroll = scroll;
       return { title, body: lines.slice(scroll), note: note || `${scroll + 1}–${Math.min(lines.length, scroll + this.capacity)} / ${lines.length} 行`,
-        footer: this.columns < 70 ? `↑↓ ${Object.entries(actions).map(([key, action]) => `${key}${action.slice(0, 2)}`).join(' ')} Esc返回` : `↑↓ 滚动 · Space 翻页${Object.entries(actions).map(([key, action]) => ` · ${key} ${action}`).join('')} · Esc 返回` };
+        footer: this.columns < 70 ? `↑↓ ${Object.entries(actions).map(([key, action]) => `${key}${action.slice(0, 2)}`).join(' ')} Esc返回` : `Ctrl-F/B 翻页 · Ctrl-D/U 半页 · ? 键位${Object.entries(actions).map(([key, action]) => ` · ${key} ${action}`).join('')} · Esc 返回` };
     };
     this.show(render);
     while (!this.quit) {
       const key = await this.next();
       if (key.name === 'escape') return null;
       if (key.text === 'q') { this.stop(); return null; }
-      if (actions[key.text]) return key.text;
-      if (key.name === 'down' || key.text === 'j') scroll++;
-      if (key.name === 'up' || key.text === 'k') scroll--;
-      if (key.name === 'pagedown' || key.name === 'space') scroll += this.capacity;
-      if (key.name === 'pageup') scroll -= this.capacity;
-      if (key.name === 'home' || key.text === 'g') scroll = 0;
-      if (key.name === 'end' || key.text === 'G') scroll = Number.MAX_SAFE_INTEGER;
+      if (!key.ctrl && !key.meta && actions[key.text]) return key.text;
+      if (key.text === '?') {
+        await this.read({ title: '阅读键位', text: '↑↓ / j k / Ctrl-N P：逐行滚动\nCtrl-F / Ctrl-B：下翻 / 上翻一页\nCtrl-D / Ctrl-U：下翻 / 上翻半页\nCtrl-V / Alt-V：下翻 / 上翻一页（Emacs）\nPageDown / PageUp：下翻 / 上翻一页\ng / G / Home / End：首行 / 末页\nSpace：下翻一页\nEsc：返回' });
+        this.show(render);
+        continue;
+      }
+      const delta = navigation(key, this.capacity);
+      if (delta !== undefined) scroll = Math.max(0, Math.min(scroll + delta, Math.max(0, lines.length - this.capacity)));
       this.draw();
     }
     return null;

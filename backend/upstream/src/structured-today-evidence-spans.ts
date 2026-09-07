@@ -6,7 +6,7 @@ export const STRUCTURED_TODAY_ADMISSION_POLICY_VERSION = "structured-today-admis
 
 const NonEmptyString = z.string().trim().min(1);
 const Sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
-const Provider = z.enum(["codex", "claude"]);
+const Provider = z.enum(["codex", "claude", "copilot"]);
 const Role = z.enum(["user", "assistant"]);
 export const EvidenceAuthorKindSchema = z.enum(["human", "agent", "automation", "host-notification", "unknown"]);
 const MessageKey = z.string().regex(/^msg-v2-[a-f0-9]{64}$/u);
@@ -187,7 +187,7 @@ export interface EvidenceJsonlParseIssueV1 {
 }
 
 export interface EvidenceJsonlParseResultV1 {
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "copilot";
   sessionId: string;
   evidenceId: string;
   parserVersion: string;
@@ -199,7 +199,7 @@ export interface EvidenceJsonlParseResultV1 {
 
 export interface ParseEvidenceJsonlInputV1 {
   source: Uint8Array;
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "copilot";
   sessionId: string;
   evidenceId: string;
   frozenPrefixByteLength?: number;
@@ -218,7 +218,7 @@ export interface EvidenceSourceRecordV1 {
 
 export interface ParseEvidenceRecordsInputV1 {
   records: readonly EvidenceSourceRecordV1[];
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "copilot";
   sessionId: string;
   evidenceId: string;
   frozenSourcePrefix: { byteLength: number; contentHash: string };
@@ -383,7 +383,7 @@ export function parseEvidenceRecords(input: ParseEvidenceRecordsInputV1): Eviden
     const normalizedMessageHash = sha256Text(projection.content);
     const authorKind = projection.role === "assistant"
       ? "agent" as const
-      : authorKindsByRecordRange[`${sourceRecord.startByte}:${sourceRecord.endByte}`] ?? defaultUserAuthorKind ?? projection.authorKind;
+      : authorKindsByRecordRange[`${sourceRecord.startByte}:${sourceRecord.endByte}`] ?? (provider === "copilot" ? projection.authorKind : defaultUserAuthorKind ?? projection.authorKind);
     const messageKey = `msg-v2-${hashTuple("message-key/v2", [
       provider,
       sessionId,
@@ -562,7 +562,7 @@ function addEvidenceRelationIssues(
 }
 
 function projectProviderMessage(
-  provider: "codex" | "claude",
+  provider: "codex" | "claude" | "copilot",
   record: Record<string, unknown>
 ): {
   role: "user" | "assistant";
@@ -571,6 +571,17 @@ function projectProviderMessage(
   projectionKind: "primary" | "fallback";
   providerMessageId?: string;
 } | undefined {
+  if (provider === "copilot") {
+    if (record.type !== "user.message" && record.type !== "assistant.message") return undefined;
+    const data = asRecord(record.data);
+    const role = record.type === "user.message" ? "user" : "assistant";
+    const content = projectText(data?.content);
+    if (!content) return undefined;
+    const providerMessageId = optionalString(record.id);
+    const authorKind = role === "assistant" || optionalString(record.agentId) || optionalString(data?.parentToolCallId) ? "agent" : data?.source === "user" ? "human" : "unknown";
+    return { role, content, projectionKind: "primary", authorKind,
+      ...(providerMessageId ? { providerMessageId } : {}) };
+  }
   if (provider === "codex") {
     const payload = asRecord(record.payload);
     if (record.type === "response_item" && payload?.type === "message") {

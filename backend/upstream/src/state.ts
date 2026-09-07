@@ -924,7 +924,7 @@ function cleanText(value: unknown, fallback: string): string {
 }
 
 function normalizePlatform(value: unknown): AgentPlatform {
-  return value === "codex" || value === "claude" || value === "minimax" || value === "other" ? value : "other";
+  return value === "codex" || value === "claude" || value === "copilot" || value === "minimax" || value === "other" ? value : "other";
 }
 
 function normalizeSessionStatus(value: unknown): AgentSessionStatus {
@@ -936,10 +936,10 @@ function normalizeSummarySource(value: unknown): "codex" | "claude" | "metadata"
 }
 
 function isTrustedStoredSessionPath(path: string, platform: unknown): boolean {
-  if (platform !== "codex" && platform !== "claude") return false;
+  if (platform !== "codex" && platform !== "claude" && platform !== "copilot") return false;
   const normalized = path.replace(/\\/g, "/").toLowerCase();
   if (normalized.includes("/.claude/tasks/") || normalized.includes("/.codex/memories/")) return false;
-  return /\.jsonl$/i.test(normalized);
+  return platform === "copilot" ? /\/events\.jsonl$/i.test(normalized) : /\.jsonl$/i.test(normalized);
 }
 
 function isUsefulStoredArtifact(artifact: string, sessionId: string, sessionPath: string): boolean {

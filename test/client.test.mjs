@@ -5,12 +5,56 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { brief, validateDate } from '../src/service.mjs';
+import { brief, readSource, validateDate } from '../src/service.mjs';
 import { render } from '../src/presentation.mjs';
 import { loadAgentWorkSnapshot, DEFAULT_SETTINGS, TraceinkAssetRepository, NodeSqliteSaver, StructuredTodayRuntimeStore, runStructuredTodayIndexPreparation, loadTraceinkSkillBundle } from '../dist/backend.mjs';
 import { structuredRunner } from './model-fixture.mjs';
 
 const date = '2026-08-29';
+
+test('Copilot supports CLI filtering, frozen source replay and the existing brief/dossier workflow', async t => {
+  const f = await fixture(t);
+  const root = path.join(f.dir, 'copilot', 'session-state');
+  const sessionDir = path.join(root, 'session-1');
+  await fs.mkdir(sessionDir, { recursive: true });
+  const file = path.join(sessionDir, 'events.jsonl');
+  const content = [
+    { type: 'session.start', timestamp: '2026-08-29T01:00:00Z', data: { sessionId: 'session-1', context: { cwd: f.dir } } },
+    { type: 'user.message', id: 'user-1', timestamp: '2026-08-29T01:01:00Z', data: { content: '读取 Copilot 来源。', source: 'user' } },
+    { type: 'assistant.message', id: 'assistant-1', timestamp: '2026-08-29T01:10:00Z', data: { content: '保留完整证据。' } }
+  ].map(JSON.stringify).join('\n') + '\n';
+  await fs.writeFile(file, content);
+  await fs.utimes(file, new Date('2026-08-29T02:00:00Z'), new Date('2026-08-29T02:00:00Z'));
+  const options = { ...f.options, roots: [f.root, root], source: 'copilot' };
+  const output = execFileSync(process.execPath, ['src/cli.mjs', 'brief', '--source', 'copilot', '--root', f.root, '--root', root,
+    '--date', date, '--data-dir', options.dataDir, '--read-only', '--format', 'json'], { encoding: 'utf8', stdio: 'pipe' });
+  const raw = JSON.parse(output);
+  assert.deepEqual(raw.sessions.map(s => s.platform), ['copilot']);
+  assert.equal(raw.sessions[0].title, '读取 Copilot 来源。');
+  const transcript = await readSource(raw, `copilot:session-1:${raw.sessions[0].path}`);
+  assert.deepEqual(transcript.messages.map(m => m.content), ['读取 Copilot 来源。', '保留完整证据。']);
+  const delegate = structuredRunner();
+  const requests = [];
+  const runner = async request => {
+    requests.push(request);
+    const result = await delegate(request);
+    const stdout = result.stdout.replaceAll('session:codex:session-1', 'session:copilot:session-1');
+    return { ...result, stdout: request.stdoutMode === 'single-json' ? JSON.parse(stdout).item.text : stdout };
+  };
+  const view = await brief(options, { runner });
+  assert.equal(view.mode, 'compiled');
+  assert.equal(view.index.sessions[0].provider, 'copilot');
+  assert.ok(requests[0].stdin.includes('读取 Copilot 来源。'));
+  assert.ok(requests.every(r => r.command !== 'copilot'), 'Copilot is a source, not a new model runner');
+  const dossier = await brief({ ...options, workline: '1' }, { runner });
+  assert.ok(dossier.dossier);
+  const reopened = await brief({ ...options, readOnly: true }, { runner: () => assert.fail('read-only called a model') });
+  assert.equal(reopened.index.contentHash, view.index.contentHash);
+  await fs.appendFile(file, JSON.stringify({ type: 'user.message', data: { content: 'later content', source: 'user' } }) + '\n');
+  assert.equal((await readSource(view, 'session:copilot:session-1')).messages.length, 2);
+  await fs.writeFile(file, content.replace('读取 Copilot 来源。', '改写 Copilot 来源。'));
+  await assert.rejects(readSource(view, 'session:copilot:session-1'), /hash|SHA-256|变化|改变|不匹配/i);
+});
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-note-parity-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));

@@ -4,7 +4,7 @@ export type TaskCategory = "research" | "build" | "write" | "analysis" | "admin"
 
 export type SessionSummaryMode = "native" | "metadata";
 
-export type SessionProvider = "codex" | "claude";
+export type SessionProvider = "codex" | "claude" | "copilot";
 
 export type AgentPlatform = SessionProvider | "minimax" | "other";
 

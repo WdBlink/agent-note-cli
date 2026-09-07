@@ -17,11 +17,14 @@ export function parseSessionTranscript(input: {
   truncated?: boolean;
   userAuthorKind?: "human" | "agent" | "automation" | "unknown";
 }): SessionTranscriptState {
-  const records = input.content.split(/\r?\n/).map(parseRecord).filter((record): record is Record<string, unknown> => Boolean(record));
+  const lines = input.content.split(/\r?\n/).filter((line) => line.trim());
+  const records = lines.map(parseRecord).filter((record): record is Record<string, unknown> => Boolean(record));
+  const malformed = lines.length - records.length;
   const userAuthorKind = input.userAuthorKind ?? "unknown";
   const primary = input.platform === "claude"
     ? parseClaudeMessages(records, userAuthorKind)
-    : parseCodexMessages(records, userAuthorKind);
+    : input.platform === "copilot" ? parseCopilotMessages(records)
+      : parseCodexMessages(records, userAuthorKind);
   const limited = limitMessages(deduplicateMessages(primary.messages));
   const contentTruncated = limited.truncated;
   const state: SessionTranscriptState = {
@@ -36,6 +39,8 @@ export function parseSessionTranscript(input: {
   };
   if (input.truncated) state.warning = "会话文件较大，阅读器保留了开头与最近内容，中间部分已省略。";
   else if (contentTruncated) state.warning = "会话正文很长，阅读器已在安全上限处停止显示。原始记录没有被修改。";
+  if (malformed) state.warning = [state.warning, `有 ${malformed} 行 JSON 无法解析，已跳过；其余有效消息仍可阅读。`].filter(Boolean).join("\n");
+  if (!state.messages.length) state.warning = [state.warning, "未找到可显示的用户或助手消息；文件可能只有元数据或工具事件。"].filter(Boolean).join("\n");
   return state;
 }
 
@@ -137,6 +142,38 @@ function parseClaudeMessages(records: Record<string, unknown>[], userAuthorKind:
     if (/tool|progress|queue-operation/i.test(type)) omittedToolEvents += 1;
   }
   return { messages, activityWindows: deduplicateActivityWindows(activityWindows), omittedToolEvents };
+}
+
+function parseCopilotMessages(records: Record<string, unknown>[]): {
+  messages: SessionTranscriptMessage[];
+  activityWindows: SessionTranscriptActivityWindow[];
+  omittedToolEvents: number;
+} {
+  const messages: SessionTranscriptMessage[] = [];
+  const activityWindows: SessionTranscriptActivityWindow[] = [];
+  const toolStarts = new Map<string, string>();
+  let omittedToolEvents = 0;
+  for (const [index, record] of records.entries()) {
+    const data = asRecord(record.data);
+    const timestamp = cleanTimestamp(record.timestamp);
+    if (record.type === "user.message" || record.type === "assistant.message") {
+      const role = record.type === "user.message" ? "user" : "assistant";
+      const content = extractContent(data?.content);
+      // Copilot marks actual user input explicitly; transformedContent may contain host instructions.
+      const userKind = cleanText(record.agentId) || cleanText(data?.parentToolCallId) ? "agent" : data?.source === "user" ? "human" : "unknown";
+      if (content) messages.push(message(record.id, index, role, content, timestamp, userKind));
+    }
+    if (record.type === "tool.execution_start" || record.type === "tool.execution_complete") {
+      omittedToolEvents++;
+      const id = cleanText(data?.toolCallId);
+      if (id && timestamp && record.type === "tool.execution_start") toolStarts.set(id, timestamp);
+      else if (id) {
+        pushActivityWindow(activityWindows, `copilot-tool-${id}`, toolStarts.get(id), timestamp, "tool-execution");
+        toolStarts.delete(id);
+      }
+    }
+  }
+  return { messages, activityWindows, omittedToolEvents };
 }
 
 function pushActivityWindow(

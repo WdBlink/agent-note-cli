@@ -20,7 +20,7 @@ if (process.argv.includes('--check')) {
 }
 const entry = await readFile(path.join(root, 'backend/index.mjs'), 'utf8');
 const imports = [...entry.matchAll(/from '\.\/upstream\/([^']+)'/g)].map(m => m[1]);
-const tests = ['structured-today-workflow', 'structured-today-integration', 'traceink-asset-repository', 'structured-today-provider-schema', 'agent-sessions'].map(n => `tests/${n}.test.ts`);
+const tests = ['structured-today-workflow', 'structured-today-integration', 'traceink-asset-repository', 'structured-today-provider-schema', 'agent-sessions', 'transcript-reader'].map(n => `tests/${n}.test.ts`);
 const result = await build({ absWorkingDir: upstream, entryPoints: [...imports, ...tests], bundle: true, platform: 'node', format: 'esm', packages: 'external', write: false, outdir: 'unused', metafile: true, logLevel: 'silent' });
 const files = Object.keys(result.metafile.inputs);
 // Keep source type imports resolvable as well as the runtime graph.

@@ -25,15 +25,15 @@ export async function brief(options, dependencies = {}) {
   const date = validateDate(options.date ?? today());
   const settings = { ...structuredClone(DEFAULT_SETTINGS), ...(options.settings ?? {}) };
   if (options.roots?.length) settings.sessionScanRoots = options.roots;
-  if (options.source && options.source !== 'all') settings.enabledSessionProviders = [options.source];
+  if (options.source && !['all', 'copilot'].includes(options.source)) settings.enabledSessionProviders = [options.source];
   const roots = settings.sessionScanRoots;
   if (!Array.isArray(roots) || !roots.length || roots.some(r => typeof r !== 'string' || !r.trim())) throw new Error('会话目录设置无效。');
-  if (roots.some(r => !/codex|claude/i.test(r))) throw new Error('会话目录名称须包含 codex 或 claude，以便原后端识别来源。');
-  if (!Array.isArray(settings.enabledSessionProviders) || !settings.enabledSessionProviders.length || settings.enabledSessionProviders.some(p => !['codex', 'claude'].includes(p))) throw new Error('请选择 Codex 或 Claude 会话来源。');
+  if (roots.some(r => !/codex|claude|copilot/i.test(r))) throw new Error('会话目录名称须包含 codex、claude 或 copilot，以便原后端识别来源。');
+  if (!Array.isArray(settings.enabledSessionProviders) || !settings.enabledSessionProviders.length || settings.enabledSessionProviders.some(p => !['codex', 'claude', 'copilot'].includes(p))) throw new Error('请选择 Codex、Claude 或 Copilot 会话来源。');
   for (const key of ['codexCliPath', 'claudeCliPath']) if (typeof settings[key] !== 'string' || !settings[key].trim()) throw new Error(`${key} 设置无效。`);
   options.onProgress?.({ stage: 'scan', status: 'running' });
   const snapshot = dependencies.snapshot ?? await (dependencies.scan ?? loadAgentWorkSnapshot)(settings, {
-    date, fs: { stat: fs.stat, readdir: fs.readdir, readFile: fs.readFile, readBytes: fs.readFile, realpath: fs.realpath }, homeDir: os.homedir()
+    date, ...(options.source === 'copilot' ? { providers: ['copilot'] } : {}), fs: { stat: fs.stat, readdir: fs.readdir, readFile: fs.readFile, readBytes: fs.readFile, realpath: fs.realpath }, homeDir: os.homedir()
   });
   options.signal?.throwIfAborted();
   if (options.project) {
@@ -45,7 +45,7 @@ export async function brief(options, dependencies = {}) {
   }
   dependencies.onSnapshot?.(snapshot);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const scope = createHash('sha256').update(JSON.stringify({ roots, providers: settings.enabledSessionProviders, timeZone, project: options.project ? path.resolve(options.project) : null })).digest('hex').slice(0, 16);
+  const scope = createHash('sha256').update(JSON.stringify({ roots, providers: options.source === 'copilot' ? ['copilot'] : settings.enabledSessionProviders, timeZone, project: options.project ? path.resolve(options.project) : null })).digest('hex').slice(0, 16);
   const dataDir = path.join(options.dataDir ?? path.join(os.homedir(), '.local/share/agent-note'), scope);
   await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
   const lock = path.join(dataDir, 'writer.lock');

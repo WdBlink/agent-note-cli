@@ -24,7 +24,7 @@ export type { AdmittedProvenanceMessageV1, StructuredTodayProvenanceSessionV1 } 
 export async function buildStructuredTodayProvenanceSession(input: {
   sourcePath: string;
   capture: AgentTranscriptCapture;
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "copilot";
   sessionId: string;
   evidenceId: string;
   authorKindsByRecordRange?: Record<string, "human" | "automation" | "host-notification">;

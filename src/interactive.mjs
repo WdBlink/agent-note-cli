@@ -6,7 +6,7 @@ import { brief, readSource, today, validateDate } from './service.mjs';
 import { render } from './presentation.mjs';
 import { Terminal } from './terminal.mjs';
 
-const sourceNames = { all: 'Codex + Claude', codex: 'Codex', claude: 'Claude Code' };
+const sourceNames = { all: 'Codex + Claude + Copilot', codex: 'Codex', claude: 'Claude Code', copilot: 'GitHub Copilot' };
 const modeNames = { raw: '尚未生成', compiled: '已保存', stale: '来源有变化' };
 const expand = value => path.resolve(value === '~' ? os.homedir() : value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value);
 const ref = index => index && ({ artifactId: index.artifactId, revision: index.revision, contentHash: index.contentHash });
@@ -224,20 +224,21 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
   }
 
   async function providers() {
-    const choice = await terminal.menu({ title: '会话来源', description: '按已安装并登录的 CLI 选择。此选择也决定生成时使用的模型服务。', items: [
+    const choice = await terminal.menu({ title: '会话来源', description: '选择本地会话来源。Copilot 来源使用已配置的 Codex / Claude 生成简报。', items: [
       option('codex', 'Codex', options.source === 'codex' ? '当前选择' : '只使用 Codex CLI'),
       option('claude', 'Claude Code', options.source === 'claude' ? '当前选择' : '只使用 Claude Code CLI'),
-      option('all', 'Codex + Claude Code', options.source === 'all' ? '当前选择' : '需要两个 CLI 都已配置')
+      option('copilot', 'GitHub Copilot', options.source === 'copilot' ? '当前选择' : '读取本地 Copilot CLI 会话'),
+      option('all', 'Codex + Claude + Copilot', options.source === 'all' ? '当前选择' : '读取全部来源；生成使用 Codex / Claude')
     ] });
     if (choice) {
       options.source = choice.id;
-      if (choice.id === 'all') options.settings = { ...options.settings, enabledSessionProviders: ['codex', 'claude'] };
+      if (choice.id === 'all') options.settings = { ...options.settings, enabledSessionProviders: ['codex', 'claude', 'copilot'] };
       invalidate();
       await perform('保存来源偏好', async () => { await persistSource(); return true; });
     }
   }
 
-  const help = '在终端里，读懂和 Agent 一起推进的工作。\n\n基本操作\n↑↓ 或 j / k 移动，Enter 打开，Esc 返回，q 或 Ctrl-C 退出。列表按 / 搜索，数字 1–9 可直接打开对应项。\n\n长文阅读\n↑↓ 逐行滚动，Space / PageDown 翻页，PageUp 上翻，Home / End 跳转首尾。工作线中 d 深读，s 查看来源，e 导出。\n\n模型调用\n浏览和切换范围只读取会话与已保存结果。只有选择生成简报、重新整理或首次深读才调用模型并使用额度。进度页按 Esc 取消；已保存的结果仍保留。\n\n来源与版本\n来源按冻结范围校验后打开。工作线选择绑定到看到的版本；列表变化时会提示重新选择。\n\n脚本接口\nagent-note brief --read-only --format json\nagent-note brief --date YYYY-MM-DD --source codex\nagent-note ui --source claude\n\n数据\n来源偏好保存在 UI 设置中。日期与项目只影响本次浏览。Provider 的登录和模型默认值由宿主机配置管理。';
+  const help = '在终端里，读懂和 Agent 一起推进的工作。\n\n基本操作\n↑↓、j / k 或 Ctrl-N/P 移动，Enter 打开，Esc 返回，q 或 Ctrl-C 退出。列表按 / 搜索，数字 1–9 可直接打开对应项。\n\n长文阅读\n↑↓、j / k 或 Ctrl-N/P 逐行滚动。Ctrl-F/B 整页翻动，Ctrl-D/U 半页翻动；Emacs 可用 Ctrl-V / Alt-V。PageDown/Up 同样可用，Space 保留向下翻页。g / G 或 Home / End 跳转首尾。工作线中 d 深读，s 查看来源，e 导出。\n\n模型调用\n浏览和切换范围只读取会话与已保存结果。只有选择生成简报、重新整理或首次深读才调用模型并使用额度。进度页按 Esc 取消；已保存的结果仍保留。\n\n来源与版本\n来源按冻结范围校验后打开。工作线选择绑定到看到的版本；列表变化时会提示重新选择。\n\n脚本接口\nagent-note brief --read-only --format json\nagent-note brief --date YYYY-MM-DD --source codex\nagent-note ui --source claude\n\n数据\n来源偏好保存在 UI 设置中。日期与项目只影响本次浏览。Provider 的登录和模型默认值由宿主机配置管理。';
 
   terminal.start();
   try {

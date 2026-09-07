@@ -14,21 +14,23 @@ import type {
 } from "../../src/structured-today-model-functions";
 import type { CockpitSettings, SessionProvider } from "../../src/types";
 
+type ModelProvider = Exclude<SessionProvider, "copilot">;
+
 export interface StructuredTodayProviderPlanV1 {
   schema: "structured-today-provider-plan/v1";
-  digestBySessionId: Record<string, SessionProvider>;
+  digestBySessionId: Record<string, ModelProvider>;
   functionProviders: Record<
     "SynthesizeWorklineIndex" | "AnalyzeWorklineDossier" | "CritiqueWorklineDossier" | "ComposeWorklineDossier" | "ArrangeReflectionProposals",
-    SessionProvider
+    ModelProvider
   >;
-  models: Record<SessionProvider, string>;
+  models: Record<ModelProvider, string>;
 }
 
 export function freezeStructuredTodayProviderPlan(
   settings: CockpitSettings,
-  sessions: Array<{ sessionId: string; provider: "codex" | "claude" }>
+  sessions: Array<{ sessionId: string; provider: SessionProvider }>
 ): StructuredTodayProviderPlanV1 {
-  const enabled = settings.enabledSessionProviders.filter((provider): provider is SessionProvider =>
+  const enabled = settings.enabledSessionProviders.filter((provider): provider is ModelProvider =>
     provider === "codex" || provider === "claude"
   );
   if (enabled.length === 0) throw new Error("请先在 Sources 中启用 Codex 或 Claude Code。");
@@ -38,7 +40,7 @@ export function freezeStructuredTodayProviderPlan(
     schema: "structured-today-provider-plan/v1",
     digestBySessionId: Object.fromEntries(sessions.map((session) => [
       session.sessionId,
-      enabled.includes(session.provider) ? session.provider : primary
+      session.provider !== "copilot" && enabled.includes(session.provider) ? session.provider : primary
     ])),
     functionProviders: {
       SynthesizeWorklineIndex: primary,
@@ -120,7 +122,7 @@ export function createStructuredTodayCliCaller(options: {
  */
 export function structuredTodayProviderSchema(
   schema: Record<string, unknown>,
-  provider: SessionProvider
+  provider: ModelProvider
 ): Record<string, unknown> {
   const normalized = normalizeSchemaNode(schema, provider === "codex");
   if (!isRecord(normalized)) throw new Error("Structured Today output schema must be an object.");
@@ -152,7 +154,7 @@ function providerFor(
   functionName: Parameters<StructuredTodayStructuredCaller["call"]>[0]["functionName"],
   variables: Record<string, string>,
   plan: StructuredTodayProviderPlanV1
-): SessionProvider {
+): ModelProvider {
   if (functionName !== "DigestSession") return plan.functionProviders[functionName];
   let sessionId = variables.expectedSessionId?.trim() ?? "";
   try {

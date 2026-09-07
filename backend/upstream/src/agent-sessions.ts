@@ -304,7 +304,7 @@ export function extractWorkSessionFromText(
     ) ??
     firstUsefulText(collectRoleTexts(parsed.records, "user")) ??
     titleFromPlainText(parsed.plainText) ??
-    basenameStem(path);
+    (platform === "copilot" ? id : basenameStem(path));
   const summary =
     firstUsefulText(collectStringsByKeys(parsed.records, ["description", "summary", "result", "final", "answer"])) ??
     firstUsefulText(collectRoleTexts(parsed.records, "assistant").reverse()) ??
@@ -565,7 +565,9 @@ function extractSessionIdentity(
     }
   }
 
-  if (canonicalId && (platform === "codex" || platform === "claude")) {
+  if (platform === "copilot") canonicalId = stringField(copilotSessionData(records), "sessionId");
+
+  if (canonicalId && (platform === "codex" || platform === "claude" || platform === "copilot")) {
     return { id: canonicalId, resumable: true };
   }
 
@@ -577,6 +579,7 @@ function extractSessionIdentity(
 }
 
 function extractCanonicalProjectPath(records: unknown[], platform: AgentPlatform): string | undefined {
+  if (platform === "copilot") return stringField(recordField(copilotSessionData(records), "context"), "cwd");
   if (platform === "codex") {
     for (const value of records) {
       const record = asRecord(value);
@@ -596,7 +599,12 @@ function extractCanonicalProjectPath(records: unknown[], platform: AgentPlatform
   return firstUsefulText(collectStringsByKeys(records, ["projectPath", "workspace", "root"]));
 }
 
+function copilotSessionData(records: unknown[]): unknown {
+  return recordField(records.find((record) => stringField(record, "type") === "session.start"), "data");
+}
+
 function extractCanonicalBranch(records: unknown[], platform: AgentPlatform): string | undefined {
+  if (platform === "copilot") return stringField(recordField(copilotSessionData(records), "context"), "branch");
   if (platform === "codex") {
     for (const value of records) {
       const record = asRecord(value);
@@ -619,32 +627,22 @@ function parseSessionText(content: string): ParsedText {
   const trimmed = content.trim();
   if (!trimmed) return { records: [], plainText: "" };
 
-  const records: unknown[] = [];
-  const allJsonlLines = trimmed.split(/\r?\n/).filter((line) => line.trim().startsWith("{"));
-  const jsonlLines =
-    allJsonlLines.length <= 2000
-      ? allJsonlLines
-      : [...allJsonlLines.slice(0, 100), ...allJsonlLines.slice(-1900)];
-  if (jsonlLines.length > 1) {
-    for (const line of jsonlLines) {
-      try {
-        records.push(JSON.parse(line) as unknown);
-      } catch {
-        // Ignore malformed event lines; one bad line should not hide the whole session.
-      }
-    }
-    return { records, plainText: trimmed };
-  }
-
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+  // Parse whole JSON before JSONL so formatted objects and arrays remain intact.
+  if (trimmed.startsWith("[") || /^\{\s*\n/.test(trimmed)) {
     try {
       const parsed = JSON.parse(trimmed) as unknown;
-      return { records: Array.isArray(parsed) ? parsed : [parsed], plainText: trimmed };
-    } catch {
-      return { records: [], plainText: trimmed };
-    }
+      return { records: Array.isArray(parsed) ? parsed : [parsed] };
+    } catch { /* A damaged record must not hide later JSONL events. */ }
   }
-
+  const lines = trimmed.split(/\r?\n/);
+  if (lines.some((line) => line.trim().startsWith("{") || line.trim().startsWith("["))) {
+    const records: unknown[] = [];
+    for (const line of lines) {
+      try { records.push(JSON.parse(line) as unknown); }
+      catch { /* Ignore malformed event lines; never use raw JSON as display text. */ }
+    }
+    return { records };
+  }
   return { records: [], plainText: trimmed };
 }
 
@@ -676,9 +674,14 @@ function hasTargetDayActivity(content: string, day: ActivityWindow): boolean | u
 function collectRoleTexts(records: unknown[], role: "user" | "assistant"): string[] {
   const out: string[] = [];
   for (const record of records) {
+    const type = stringField(record, "type");
     const payload = readPayload(record);
+    if ((type === "event_msg" && stringField(payload, "type") === (role === "user" ? "user_message" : "agent_message")) || type === `${role}.message`) {
+      out.push(...collectTextFragments(type === "event_msg" ? recordField(payload, "message") : recordField(recordField(record, "data"), "content")));
+      continue;
+    }
     const message = recordField(record, "message");
-    const candidateRole = stringField(payload, "role") ?? stringField(record, "role") ?? stringField(message, "role");
+    const candidateRole = stringField(payload, "role") ?? stringField(record, "role") ?? stringField(message, "role") ?? (type === "user" || type === "assistant" ? type : undefined);
     if (candidateRole !== role) continue;
     const content = recordField(payload, "content") ?? recordField(record, "content") ?? recordField(message, "content");
     out.push(...collectTextFragments(content));
@@ -813,6 +816,7 @@ function resumeCommand(platform: AgentPlatform, id: string): string | undefined 
   if (!id) return undefined;
   if (platform === "codex") return `codex resume ${id}`;
   if (platform === "claude") return `claude --resume ${id}`;
+  if (platform === "copilot") return `copilot --resume=${id}`;
   return undefined;
 }
 
@@ -943,6 +947,7 @@ function isCodexDateHierarchyDirectory(path: string): boolean {
 
 function inferPlatform(path: string, fallback: AgentPlatform = "other"): AgentPlatform {
   const lower = path.toLowerCase();
+  if (lower.includes("copilot")) return "copilot";
   if (lower.includes("codex")) return "codex";
   if (lower.includes("claude")) return "claude";
   if (lower.includes("minimax") || lower.includes("mini-max")) return "minimax";
@@ -950,6 +955,7 @@ function inferPlatform(path: string, fallback: AgentPlatform = "other"): AgentPl
 }
 
 function isCandidateSessionFile(path: string, platform: AgentPlatform): boolean {
+  if (platform === "copilot") return /(?:^|[\\/])events\.jsonl$/i.test(path);
   if (platform === "codex" || platform === "claude") return /\.jsonl$/i.test(path);
   return false;
 }

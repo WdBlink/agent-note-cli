@@ -65,7 +65,7 @@ export async function runStructuredTodayIndexPreparation(input: {
   const artifactId = structuredTodayIndexArtifactId(input.logicalDate);
   const editorialContract = await loadStructuredTodayEditorialContract();
   const digestFamilies = structuredTodaySessionFamilies(input.snapshot.sessions.flatMap((session) =>
-    session.platform === "codex" || session.platform === "claude" ? [session] : []
+    session.platform === "codex" || session.platform === "claude" || session.platform === "copilot" ? [session] : []
   ));
   const plan = freezeStructuredTodayProviderPlan(
     input.settings,

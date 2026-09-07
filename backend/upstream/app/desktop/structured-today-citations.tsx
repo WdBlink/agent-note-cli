@@ -6,7 +6,7 @@ import { structuredTranscriptEvidence } from "../../src/session-family";
 
 export interface StructuredTodayEvidenceTarget {
   title: string;
-  platform: "codex" | "claude";
+  platform: "codex" | "claude" | "copilot";
   request: SessionTranscriptRequest;
   citation?: {
     label: string;
@@ -19,7 +19,7 @@ export interface StructuredTodayCitationTarget {
   evidenceId: string;
   label: string;
   aliases: string[];
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "copilot";
   title: string;
   target: StructuredTodayEvidenceTarget;
 }

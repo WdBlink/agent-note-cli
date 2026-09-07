@@ -284,7 +284,7 @@ export interface StructuredTodaySpanState {
   statementId: string;
   spanId: string;
   evidenceId: string;
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "copilot";
   sessionId: string;
   role: "user" | "assistant";
   authorKind: "human" | "agent" | "automation" | "host-notification" | "unknown";

@@ -885,7 +885,7 @@ function normalizePlatform(value: unknown): AgentPlatform | undefined {
 
 function compilerProviders(enabled: SessionProvider[], preferred?: SessionProvider): SessionProvider[] {
   const ordered: SessionProvider[] = [];
-  if (preferred && enabled.includes(preferred)) ordered.push(preferred);
+  if (preferred && preferred !== "copilot" && enabled.includes(preferred)) ordered.push(preferred);
   for (const provider of ["codex", "claude"] as const) {
     if (enabled.includes(provider) && !ordered.includes(provider)) ordered.push(provider);
   }

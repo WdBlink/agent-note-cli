@@ -17,8 +17,8 @@ const help = `Agent Note CLI · 与 Agent Notebook 相同的 Today 后端
   --date YYYY-MM-DD                   日期，默认今天
   --timezone IANA                     时区，默认系统时区
   --project PATH                      只查看该项目及子目录
-  --source all|codex|claude            会话来源，默认 all
-  --root PATH                        扫描目录，可重复；目录名需含 codex 或 claude
+  --source all|codex|claude|copilot    会话来源，默认 all
+  --root PATH                        扫描目录，可重复；目录名需含 codex、claude 或 copilot
   --settings FILE                    App 格式的 settings JSON
   --codex-model NAME                  覆盖 Codex 模型
   --claude-model NAME                 覆盖 Claude 模型
@@ -45,7 +45,7 @@ async function main() {
   if (v.version) return void process.stdout.write(JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url))).version + '\n');
   if (positionals.length > 1 || (positionals[0] && !['brief', 'ui'].includes(positionals[0]))) throw new Error('未知命令。请运行 agent-note --help。');
   if (!['text', 'markdown', 'json'].includes(v.format)) throw new Error('--format 必须为 text、markdown 或 json。');
-  if (v.source && !['all', 'codex', 'claude'].includes(v.source)) throw new Error('--source 必须为 all、codex 或 claude。');
+  if (v.source && !['all', 'codex', 'claude', 'copilot'].includes(v.source)) throw new Error('--source 必须为 all、codex、claude 或 copilot。');
   if (v['read-only'] && v.refresh) throw new Error('--read-only 与 --refresh 不能同时使用。');
   if (v.timezone) {
     new Intl.DateTimeFormat('en', { timeZone: v.timezone }).format();

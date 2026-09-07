@@ -148,7 +148,7 @@ export async function buildStructuredTodayIndexInput(
           return {
             relation: member.id === session.id ? "primary" : "child-agent",
             metadata: sessionMetadata(member),
-            coverage: parsed.truncated ? "partial" : "complete",
+            coverage: parsed.truncated || parsed.warning ? "partial" : "complete",
             warning: parsed.warning ?? null,
             omittedToolEvents: parsed.omittedToolEvents,
             messages: parsed.messages
@@ -368,8 +368,8 @@ export function boundedEvidenceJson<T extends {
 }
 
 export interface StructuredTodaySessionFamily {
-  root: AgentWorkSession & { platform: "codex" | "claude" };
-  members: Array<AgentWorkSession & { platform: "codex" | "claude" }>;
+  root: AgentWorkSession & { platform: "codex" | "claude" | "copilot" };
+  members: Array<AgentWorkSession & { platform: "codex" | "claude" | "copilot" }>;
 }
 
 export function structuredTodaySessionFamilies(
@@ -419,8 +419,8 @@ function sessionMetadata(session: AgentWorkSession) {
 
 function isSupportedSession(
   session: AgentWorkSession
-): session is AgentWorkSession & { platform: "codex" | "claude" } {
-  return session.platform === "codex" || session.platform === "claude";
+): session is AgentWorkSession & { platform: "codex" | "claude" | "copilot" } {
+  return session.platform === "codex" || session.platform === "claude" || session.platform === "copilot";
 }
 
 async function mapWithConcurrency<T, R>(
@@ -445,8 +445,8 @@ function validTimestamp(value: string | undefined): string | undefined {
   return value && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : undefined;
 }
 
-function providerLabel(provider: "codex" | "claude"): string {
-  return provider === "codex" ? "Codex" : "Claude Code";
+function providerLabel(provider: "codex" | "claude" | "copilot"): string {
+  return provider === "codex" ? "Codex" : provider === "copilot" ? "GitHub Copilot" : "Claude Code";
 }
 
 function boundedError(error: unknown): string {

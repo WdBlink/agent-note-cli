@@ -188,6 +188,49 @@ test('terminal handles buffered arrows, Unicode search, resize, paging and resto
   assert.match(f.text(), /\x1b\[\?1049l$/);
 });
 
+test('Vim and Emacs navigation scrolls menus/readers without firing plain-letter actions', async t => {
+  const f = tty(t);
+  f.terminal.start();
+  try {
+    const position = {};
+    const reading = f.terminal.read({ title: '快捷键', text: Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n'), position, actions: { d: '深读', s: '来源', e: '导出' } });
+    const page = f.terminal.capacity;
+    for (const [key, expected] of [['\x06', page], ['\x02', 0], ['\x04', page / 2], ['\x15', 0], ['\x16', page], ['\x1bv', 0], ['\x0e', 1], ['\x10', 0], ['G', 200 - page], ['g', 0]]) {
+      f.input.write(key);
+      await tick();
+      assert.equal(position.scroll, expected, JSON.stringify(key));
+    }
+    f.input.write('d');
+    assert.equal(await reading, 'd');
+    const items = Array.from({ length: 80 }, (_, i) => ({ id: String(i), label: `Item ${i}` }));
+    const menu = f.terminal.menu({ title: '列表', items });
+    f.input.write('\x16\x1bv\x0e\r');
+    assert.equal((await menu).id, '1');
+  } finally { f.terminal.close(); }
+});
+
+test('menu highlights both aligned rows and clips CJK text before the preview divider', async t => {
+  const f = tty(t);
+  f.terminal.color = true;
+  f.terminal.start();
+  try {
+    const menu = f.terminal.menu({ title: '来源', items: [
+      { id: 'one', label: '一条很长的会话标题'.repeat(12), hint: '/项目/'.repeat(20), preview: 'PREVIEW\n右栏正文' },
+      { id: 'two', label: '另一个会话', hint: '未选中' }
+    ] });
+    const screen = f.terminal.renderScreen();
+    const rendered = frame({ columns: 108, rows: 28, color: true, ...screen }).split('\r\n');
+    const highlighted = rendered.filter(line => line.includes('\x1b[48;2;66;48;33m'));
+    assert.equal(highlighted.length, 2);
+    assert.ok(highlighted.every(line => line.includes('…')));
+    const dividerColumns = highlighted.map(line => width(line.slice(0, line.indexOf('│'))));
+    assert.equal(dividerColumns[0], dividerColumns[1]);
+    assert.ok(rendered.every(line => width(line) < 108));
+    f.input.write('\r');
+    await menu;
+  } finally { f.terminal.close(); }
+});
+
 test('terminal cancellation aborts work and restores the terminal after SIGINT', async t => {
   const f = tty(t);
   f.terminal.start();
