@@ -8,3 +8,7 @@ export { TraceinkAssetRepository } from './upstream/app/desktop/traceink-asset-r
 export { runStructuredTodayIndexPreparation, runStructuredTodayDossierPreparation } from './upstream/app/desktop/structured-today-runtime.ts';
 export { desktopCliRunner } from './upstream/app/desktop/cli-runner.ts';
 export { structuredTodaySessionFamilies } from './upstream/app/desktop/structured-today-input.ts';
+export { StructuredTodayRuntimeStore } from './upstream/app/desktop/structured-today-runtime-store.ts';
+export { readBoundedTranscriptSource } from './upstream/app/desktop/transcript-source-reader.ts';
+export { parseSessionTranscript } from './upstream/app/desktop/transcript-reader.ts';
+export { sessionUserAuthorKind } from './upstream/app/desktop/session-authority.ts';

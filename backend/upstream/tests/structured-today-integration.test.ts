@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { CliRunner } from "../src/agent-summary";
+import { StructuredTodayRuntimeStore } from "../app/desktop/structured-today-runtime-store";
 import { NodeSqliteSaver } from "../src/langgraph-node-sqlite-checkpointer";
 import { projectStructuredTodayReview } from "../src/structured-today-review-state";
 import type { AgentWorkSession, AgentWorkSnapshot, CockpitSettings } from "../src/types";
@@ -28,6 +29,7 @@ import {
   runStructuredTodayIndexPreparation,
   runStructuredTodayProposalPreparation
 } from "../app/desktop/structured-today-runtime";
+import { createStructuredTodayCitationTargets } from "../app/desktop/structured-today-citations";
 import { buildStructuredTodayIndexInput } from "../app/desktop/structured-today-input";
 import { loadStructuredTodayEditorialContract } from "../src/structured-today-model-functions";
 import { authorizeSessionTranscriptRequest } from "../app/desktop/session-transcript-access";
@@ -63,7 +65,23 @@ test("real T049 path freezes evidence, commits a structured index, and prepares 
     filePath: path.join(temporaryRoot, "traceink-assets-v1.json")
   });
   const checkpointer = NodeSqliteSaver.fromConnectionString(":memory:");
-  const runner = structuredRunner();
+  const runtimeStore = new StructuredTodayRuntimeStore(":memory:");
+  const prompts: string[] = [];
+  const delegate = structuredRunner();
+  let rejectProposalOnce = true;
+  const runner: CliRunner = async (request) => {
+    prompts.push(request.stdin);
+    const result = await delegate(request);
+    if (request.stdin.includes("Arrange the user") && rejectProposalOnce) {
+      rejectProposalOnce = false;
+      const envelope = JSON.parse(result.stdout);
+      const output = JSON.parse(envelope.item.text);
+      output.proposals[0].sourceQuote = "invented human reflection";
+      envelope.item.text = JSON.stringify(output);
+      return { ...result, stdout: JSON.stringify(envelope) };
+    }
+    return result;
+  };
   try {
     await repository.load();
     const indexResult = await runStructuredTodayIndexPreparation({
@@ -72,6 +90,7 @@ test("real T049 path freezes evidence, commits a structured index, and prepares 
       settings: settings(),
       repository,
       checkpointer,
+      runtimeStore,
       runner
     });
     assert.equal(indexResult.artifact.worklines.length, 1);
@@ -103,6 +122,12 @@ test("real T049 path freezes evidence, commits a structured index, and prepares 
     assert.equal(projection.worklines[0]?.dossier, undefined);
 
     const worklineId = indexResult.artifact.worklines[0]!.worklineId;
+    const beforeDossier = prompts.length;
+    await fs.rm(transcriptPath);
+    await assert.rejects(runStructuredTodayDossierPreparation({ logicalDate, indexReference: indexResult.reference,
+      worklineId, settings: settings(), repository, checkpointer, runtimeStore, runner }), /ENOENT/);
+    assert.equal(prompts.length, beforeDossier, "missing frozen source must fail before model calls");
+    await fs.writeFile(transcriptPath, transcript + "\n" + JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: "LATER_APPEND_NOT_ADMITTED" } }));
     const dossier = await runStructuredTodayDossierPreparation({
       logicalDate,
       indexReference: indexResult.reference,
@@ -110,8 +135,14 @@ test("real T049 path freezes evidence, commits a structured index, and prepares 
       settings: settings(),
       repository,
       checkpointer,
+      runtimeStore,
       runner
     });
+    assert.equal(prompts.length - beforeDossier, 3);
+    for (const prompt of prompts.slice(beforeDossier)) {
+      assert.ok(prompt.includes("重构 Today 后端。"));
+      assert.ok(!prompt.includes("LATER_APPEND_NOT_ADMITTED"));
+    }
     assert.equal(dossier.worklineId, worklineId);
     assert.equal(await checkpointer.getTuple({ configurable: { thread_id: dossier.workflowRunId } }), undefined);
     assert.deepEqual(dossier.admittedSessionIds, [session.id]);
@@ -135,6 +166,8 @@ test("real T049 path freezes evidence, commits a structured index, and prepares 
     ));
     assert.equal(repository.snapshot().structuredReflections?.length, reflectionCount);
     assert.equal(latestStructuredTodayReflection(repository.snapshot(), dossier)?.revision, 1);
+    await assert.rejects(runStructuredTodayProposalPreparation({ logicalDate, indexReference: indexResult.reference,
+      worklineId, reflection, settings: settings(), repository, checkpointer, runtimeStore, runner }), /sourceQuote/);
     const proposals = await runStructuredTodayProposalPreparation({
       logicalDate,
       indexReference: indexResult.reference,
@@ -143,6 +176,7 @@ test("real T049 path freezes evidence, commits a structured index, and prepares 
       settings: settings(),
       repository,
       checkpointer,
+      runtimeStore,
       runner
     });
     assert.deepEqual(new Set(proposals.proposals.map((proposal) => proposal.category)), new Set([
@@ -159,7 +193,7 @@ test("real T049 path freezes evidence, commits a structured index, and prepares 
     const dispositions = latestStructuredTodayProposalDispositions(repository.snapshot(), proposals);
     assert.equal(dispositions.length, 5);
     assert.deepEqual(
-      repository.snapshot().structuredRuns?.map((run) => [run.kind, run.status]),
+      runtimeStore.listRuns().map((run) => [run.kind, run.status]),
       [["index", "ready"], ["dossier", "ready"], ["proposals", "ready"]]
     );
     const sealed = sealStructuredTodayPage(
@@ -201,6 +235,7 @@ test("real T049 path freezes evidence, commits a structured index, and prepares 
       settings: settings(),
       repository,
       checkpointer,
+      runtimeStore,
       runner: proposalGate.runner
     });
     await proposalGate.entered;
@@ -237,6 +272,7 @@ test("real T049 path freezes evidence, commits a structured index, and prepares 
     );
   } finally {
     checkpointer.close();
+    runtimeStore.close();
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   }
 });
@@ -338,6 +374,7 @@ test("a primary family with child-Agent evidence invokes one digest and remains 
   };
   const repository = createTraceinkAssetRepository({ filePath: path.join(temporaryRoot, "assets.json") });
   const checkpointer = NodeSqliteSaver.fromConnectionString(":memory:");
+  const runtimeStore = new StructuredTodayRuntimeStore(":memory:");
   let digestCalls = 0;
   const delegate = structuredRunner();
   try {
@@ -348,6 +385,7 @@ test("a primary family with child-Agent evidence invokes one digest and remains 
       settings: settings(),
       repository,
       checkpointer,
+      runtimeStore,
       runner: async (request) => {
         if (request.stdin.includes("Digest exactly one")) digestCalls += 1;
         return delegate(request);
@@ -356,9 +394,17 @@ test("a primary family with child-Agent evidence invokes one digest and remains 
     assert.equal(digestCalls, 1);
     assert.equal(result.artifact.sessions.length, 1);
     assert.equal(result.artifact.evidence.length, 2);
+    const targets = createStructuredTodayCitationTargets(result.artifact, ["family-child:codex:child-runtime"], "E");
+    assert.equal(targets.length, 1);
+    const authorized = authorizeSessionTranscriptRequest(targets[0]!.target.request, [], createEmptyNotebookDocument(), repository.snapshot());
+    assert.equal(authorized.id, child.id);
+    assert.equal(authorized.transcriptCapture?.sha256, child.transcriptCapture?.sha256);
+    assert.throws(() => authorizeSessionTranscriptRequest({ ...targets[0]!.target.request, path: rootPath }, [], createEmptyNotebookDocument(), repository.snapshot()), /不匹配/);
+
     assert.equal(projectStructuredTodayReview(repository.snapshot(), logicalDate, [child, root]).mode, "compiled");
   } finally {
     checkpointer.close();
+    runtimeStore.close();
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   }
 });
@@ -371,6 +417,7 @@ test("structured projection becomes stale only when exact captured evidence chan
   const original = capturedSession(transcriptPath, transcript);
   const repository = createTraceinkAssetRepository({ filePath: path.join(temporaryRoot, "assets.json") });
   const checkpointer = NodeSqliteSaver.fromConnectionString(":memory:");
+  const runtimeStore = new StructuredTodayRuntimeStore(":memory:");
   try {
     await repository.load();
     await runStructuredTodayIndexPreparation({
@@ -379,6 +426,7 @@ test("structured projection becomes stale only when exact captured evidence chan
       settings: settings(),
       repository,
       checkpointer,
+      runtimeStore,
       runner: structuredRunner()
     });
     assert.equal(projectStructuredTodayReview(repository.snapshot(), logicalDate, [original]).mode, "compiled");
@@ -392,6 +440,7 @@ test("structured projection becomes stale only when exact captured evidence chan
     assert.equal(projectStructuredTodayReview(repository.snapshot(), logicalDate, [changed]).mode, "stale");
   } finally {
     checkpointer.close();
+    runtimeStore.close();
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   }
 });
@@ -399,17 +448,19 @@ test("structured projection becomes stale only when exact captured evidence chan
 function structuredRunner(): CliRunner {
   return async (request) => {
     const evidenceId = "session:codex:session-1";
+    const variables = JSON.parse(request.stdin.split("VARIABLES:\n")[1]!) as Record<string, string>;
     let output: unknown;
     if (request.stdin.includes("Digest exactly one")) {
       output = {
-        sessionId: "session-1",
+        sessionId: variables.expectedSessionId,
         summary: "完成结构化 workflow 接缝。",
         currentStop: "等待接入 Today UI。",
         participation: { human: "用户确定方向。", agent: "Agent 完成实现。" },
-        evidenceIds: [evidenceId],
+        evidenceIds: JSON.parse(variables.allowedEvidenceIdsJson!),
         uncertainties: []
       };
     } else if (request.stdin.includes("Reconstruct cross-Session")) {
+      const sessionIds = JSON.parse(variables.allowedSessionIdsJson!) as string[];
       output = {
         worklines: [{
           worklineId: "workline-structured-today",
@@ -421,11 +472,11 @@ function structuredRunner(): CliRunner {
           possibleChange: "Today 可以稳定显示结构化工作线。",
           participation: { human: "确定产品方向。", agent: "完成工程实现。" },
           evidenceReadiness: "ready",
-          sessionIds: ["session-1"],
-          evidenceIds: [evidenceId],
+          sessionIds,
+          evidenceIds: JSON.parse(variables.allowedEvidenceIdsJson!),
           extensions: []
         }],
-        assignments: [{ sessionId: "session-1", worklineIds: ["workline-structured-today"] }],
+        assignments: sessionIds.map((sessionId) => ({ sessionId, worklineIds: ["workline-structured-today"] })),
         unresolvedSessionIds: []
       };
     } else if (request.stdin.includes("Analyze only the selected")) {
@@ -531,3 +582,64 @@ function settings(): CockpitSettings {
     dailyReviewScheduleTime: "18:30"
   };
 }
+
+// Regression: the first family survives a terminal business failure in its sibling.
+test("terminal digest retry reruns only failed families and publishes once recovered", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "structured-retry-"));
+  const checkpointer = NodeSqliteSaver.fromConnectionString(":memory:");
+  const runtimeStore = new StructuredTodayRuntimeStore(":memory:");
+  try {
+    const text = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: "retry evidence" } });
+    const sessions = await Promise.all([1, 2].map(async (n) => {
+      const filename = path.join(root, `${n}.jsonl`);
+      await fs.writeFile(filename, text);
+      return { ...capturedSession(filename, text), id: `session-${n}` };
+    }));
+    const calls = new Map<string, number>();
+    const delegate = structuredRunner();
+    const runner: CliRunner = async (request) => {
+      if (request.stdin.includes("Digest exactly one")) {
+        const { expectedSessionId } = JSON.parse(request.stdin.split("VARIABLES:\n")[1]!);
+        calls.set(expectedSessionId, (calls.get(expectedSessionId) ?? 0) + 1);
+        if (expectedSessionId === "session-2" && calls.get(expectedSessionId) === 1) throw new Error("temporary outage");
+      }
+      return delegate(request);
+    };
+    const args = { logicalDate, snapshot: { date: logicalDate, generatedAt: "2026-08-29T02:00:00.000Z", sessions, sources: [], warnings: [] },
+      settings: settings(), repository: createTraceinkAssetRepository({ filePath: path.join(root, "assets.json") }), checkpointer, runtimeStore, runner };
+    await assert.rejects(runStructuredTodayIndexPreparation(args), /publication gates/);
+    const recovered = await runStructuredTodayIndexPreparation(args);
+    assert.equal(recovered.artifact.coverage.complete, true);
+    assert.equal(calls.get("session-1"), 1);
+    assert.equal(calls.get("session-2"), 2);
+    await runStructuredTodayIndexPreparation(args);
+    assert.equal(calls.get("session-1"), 1, "unchanged family reuses its successful digest across revisions");
+    assert.equal(calls.get("session-2"), 2);
+    const changedText = text + "\n" + JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: "new evidence" } });
+    await fs.writeFile(sessions[1]!.path, changedText);
+    args.snapshot.sessions[1] = { ...capturedSession(sessions[1]!.path, changedText), id: "session-2" };
+    await runStructuredTodayIndexPreparation(args);
+    assert.equal(calls.get("session-1"), 1);
+    assert.equal(calls.get("session-2"), 3, "only changed family recomputes");
+  } finally {
+    checkpointer.close();
+    runtimeStore.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("structured evidence budget bounds serialized metadata and never repeats head/tail messages", async () => {
+  const content = Array.from({ length: 4000 }, (_, n) => JSON.stringify({ type: "response_item", timestamp: "2026-08-29T01:00:00.000Z",
+    payload: { type: "message", id: String(n), role: "assistant", content: `message-${n} \\ \"` } })).join("\n");
+  const result = await buildStructuredTodayIndexInput({ logicalDate,
+    snapshot: { date: logicalDate, generatedAt: "2026-08-29T02:00:00.000Z", sessions: [capturedSession("/tmp/budget.jsonl", content)], sources: [], warnings: [] },
+    editorialContract: await loadStructuredTodayEditorialContract(), artifactId: "budget", revision: 1, workflowRunId: "budget",
+    readTranscript: async () => ({ content, truncated: false }) });
+  const serialized = result.sessions[0]!.evidenceText;
+  assert.ok(serialized.length <= 240000);
+  const parsed = JSON.parse(serialized) as { coverage: string; messages: Array<{ id: string }> };
+  assert.equal(parsed.coverage, "partial");
+  assert.equal(new Set(parsed.messages.map((m) => m.id)).size, parsed.messages.length);
+  assert.equal(parsed.messages[0]?.id, "0");
+  assert.equal(parsed.messages.at(-1)?.id, "3999");
+});

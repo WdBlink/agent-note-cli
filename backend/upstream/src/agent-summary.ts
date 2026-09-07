@@ -17,6 +17,7 @@ export interface CliRunRequest {
   cwd: string;
   timeoutMs: number;
   stdoutMode?: CliStdoutMode;
+  signal?: AbortSignal;
 }
 
 export interface CliRunResult {
@@ -54,6 +55,7 @@ export interface CliSummarizerOptions {
   batchSize?: number;
   concurrency?: number;
   onBatch?: (batch: SessionSummaryBatch) => void | Promise<void>;
+  signal?: AbortSignal;
 }
 
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -109,12 +111,16 @@ export async function summarizeSessionsWithProviderClis(
   });
   let callbackQueue = Promise.resolve();
   const results = await mapWithConcurrency(jobs, normalizePositiveInteger(options.concurrency, 2), async ({ platform, batch }) => {
+    if (options.signal?.aborted) return { summaries: [], warnings: [] };
     let result: SessionSummaryBatch;
     try {
-      result = await runProvider(platform, settings, date, batch, runner, homeDir, timeoutMs, options.modelByPlatform?.[platform]);
+      result = await runProvider(platform, settings, date, batch,
+        (request) => runner({ ...request, ...(options.signal ? { signal: options.signal } : {}) }),
+        homeDir, timeoutMs, options.modelByPlatform?.[platform]);
     } catch (error) {
       result = { summaries: [], warnings: [`${platformLabel(platform)} 总结失败：${errorMessage(error)}`] };
     }
+    if (options.signal?.aborted) return { summaries: [], warnings: [] };
     if (options.onBatch) {
       callbackQueue = callbackQueue.then(() => options.onBatch?.(result));
       await callbackQueue;

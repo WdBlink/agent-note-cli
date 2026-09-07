@@ -23,7 +23,7 @@ import type {
 import { STRUCTURED_TODAY_WORKFLOW_VERSION } from "./structured-today-contracts";
 import type { TodayBoardEvidenceRevision } from "./today-board";
 import type { AgentWorkSession } from "./types";
-import { familyChildEvidenceId } from "./session-family";
+import { structuredTranscriptEvidence } from "./session-family";
 
 export type StructuredTodayReviewMode = "raw" | "compiled" | "stale";
 
@@ -76,7 +76,7 @@ export function projectStructuredTodayReview(
   const workflowStale = activeIndex.provenance.workflowVersion !== STRUCTURED_TODAY_WORKFLOW_VERSION;
   const stale = uncompiledEvidence.length > 0 || missingStored.length > 0 || workflowStale;
   const diagnostic = workflowStale
-    ? "这份工作脉络由旧版参与权威规则生成；请重新整理后再据此判断人的参与。"
+    ? "这份工作脉络由旧版证据规则生成；请更新后再据此作出判断。"
     : missingStored.length > 0
     ? `${missingStored.length} indexed Session${missingStored.length === 1 ? " is" : "s are"} absent from the current snapshot.`
     : undefined;
@@ -124,14 +124,10 @@ function currentManifest(sessions: AgentWorkSession[]): Map<string, TodayBoardEv
 
 function storedManifest(index: TodayWorklineIndexV1): Map<string, TodayBoardEvidenceRevision> {
   const result = new Map<string, TodayBoardEvidenceRevision>();
-  for (const evidence of index.evidence) {
-    const child = evidence.sourceKind === "linked-material" && evidence.provider
-      ? parseFamilyChildEvidenceId(evidence.evidenceId, evidence.provider)
-      : undefined;
-    if (evidence.sourceKind !== "session" && !child) continue;
-    if (!evidence.provider) continue;
-    const sessionId = evidence.sourceKind === "session" ? evidence.sessionId : child;
-    if (!sessionId) continue;
+  for (const locator of index.evidence) {
+    const evidence = structuredTranscriptEvidence(locator);
+    if (!evidence) continue;
+    const sessionId = evidence.sessionId;
     const end = evidence.range ? EXACT_BYTE_RANGE.exec(evidence.range)?.[1] : undefined;
     const revision = evidence.range === "metadata-only"
       ? "capture-unavailable"
@@ -142,19 +138,6 @@ function storedManifest(index: TodayWorklineIndexV1): Map<string, TodayBoardEvid
     result.set(identity, { identity, revision });
   }
   return result;
-}
-
-function parseFamilyChildEvidenceId(evidenceId: string, provider: string): string | undefined {
-  const prefix = `family-child:${provider}:`;
-  if (!evidenceId.startsWith(prefix)) return undefined;
-  try {
-    const sessionId = decodeURIComponent(evidenceId.slice(prefix.length));
-    return sessionId && familyChildEvidenceId({ platform: provider as AgentWorkSession["platform"], id: sessionId }) === evidenceId
-      ? sessionId
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function sessionIdentity(provider: string, sessionId: string, sourcePath: string): string {

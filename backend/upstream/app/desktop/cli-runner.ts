@@ -3,10 +3,25 @@ import os from "node:os";
 import type { CliRunner, CliRunRequest, CliRunResult } from "../../src/agent-summary";
 import { createCliOutputCollector, structuredCliError } from "../../src/cli-output-collector";
 
-export const desktopCliRunner: CliRunner = (request) => runDesktopCli(request);
+let activeCalls = 0;
+const waiting: Array<() => void> = [];
+export const desktopCliRunner: CliRunner = async (request) => {
+  request.signal?.throwIfAborted();
+  if (activeCalls >= 3) await new Promise<void>((resolve) => waiting.push(resolve));
+  else activeCalls += 1;
+  try {
+    request.signal?.throwIfAborted();
+    return await runDesktopCli(request);
+  } finally {
+    const next = waiting.shift();
+    if (next) next();
+    else activeCalls -= 1;
+  }
+};
 
 export function runDesktopCli(request: CliRunRequest): Promise<CliRunResult> {
   return new Promise((resolve, reject) => {
+    request.signal?.throwIfAborted();
     const child = spawn(request.command, request.args, {
       cwd: request.cwd,
       env: desktopCliEnvironment(),
@@ -32,6 +47,7 @@ export function runDesktopCli(request: CliRunRequest): Promise<CliRunResult> {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      request.signal?.removeEventListener("abort", abort);
       if (forceKillTimer) clearTimeout(forceKillTimer);
       if (error) reject(error);
       else {
@@ -60,6 +76,9 @@ export function runDesktopCli(request: CliRunRequest): Promise<CliRunResult> {
     const timer = setTimeout(() => {
       terminate(new Error(`CLI 总结超过 ${Math.round(request.timeoutMs / 1000)} 秒`));
     }, request.timeoutMs);
+    const abort = (): void => terminate(new Error("CLI 任务已取消"));
+    request.signal?.addEventListener("abort", abort, { once: true });
+    if (request.signal?.aborted) abort();
     child.stdout.on("data", (chunk: Buffer) => append("stdout", chunk));
     child.stderr.on("data", (chunk: Buffer) => append("stderr", chunk));
     child.on("error", (error) => {
@@ -86,6 +105,7 @@ export function runDesktopCli(request: CliRunRequest): Promise<CliRunResult> {
         finish(new Error(`CLI 退出码 ${code ?? signal ?? "unknown"}${detail ? `：${detail}` : ""}`));
       }
     });
+    child.stdin.on("error", (error) => { if (!settled) terminate(error); });
     child.stdin.end(request.stdin);
   });
 }

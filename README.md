@@ -1,17 +1,19 @@
 # Agent Note CLI
 
 ```text
-  ▄▄▄▄▄▄▄▄    ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀
-  █ ▄▄▄▄ █    █▀█ █▄█ ██▄ █░▀█ ░█░
-  █ ▄▄   █
-  █ ▄▄▄  █    █▄░█ █▀█ ▀█▀ █▀▀
-  █     ▄█    █░▀█ █▄█ ░█░ ██▄
-  ▀▀▀▀▀▀▀
+  ▐ AGENT NOTE
+
+  工作脉络  /  日期与项目  /  深读与原文
+  ↑↓ 移动   Enter 打开   Esc 返回
 ```
 
 **今天，和 AI 一起推进了什么？**
 
 把散落在 Codex、Claude Code 中的工作整理成一份有来源依据的 daily brief。在终端查看工作脉络、当前进展和参与情况，再按需深读一条工作线。
+
+![Agent Note CLI 交互终端预览](docs/assets/agent-note-preview.gif)
+
+交互终端会把会话整理成可继续阅读的工作线，并保留来源与深读入口。
 
 [![Checks](https://github.com/WdBlink/agent-note-cli/actions/workflows/check.yml/badge.svg)](https://github.com/WdBlink/agent-note-cli/actions/workflows/check.yml)
 [![Release](https://img.shields.io/github/v/release/WdBlink/agent-note-cli)](https://github.com/WdBlink/agent-note-cli/releases/latest)
@@ -64,18 +66,27 @@ agent-note brief --source codex
 
 只用 Claude Code 则替换为 `--source claude`。两个来源都已配置时，运行 `agent-note brief`。
 
-不带参数运行 `agent-note`，会进入像素首页：
+不带参数运行 `agent-note`，会进入可持续导航的终端应用。也可以用 `agent-note ui --source codex` 带着指定范围进入：
 
 ```text
-  今天，和 AI 一起推进了什么？
+  ▐ AGENT NOTE    /    首页
+  ─────────────────────────────────────
+  今天，和 Agent 一起推进了什么？
 
-  1  今日 brief      整理工作脉络
-  2  阅读已有 brief   不调用模型
-  3  帮助             命令与导出
-  q  退出
+  › 01  工作脉络
+        阅读简报，按工作线继续深读
+    02  回看日期
+    03  选择项目
+    04  会话来源
+    05  浏览会话原文
+    06  使用帮助
+
+  ↑↓/jk 移动  Enter打开  Esc返回  q退出
 ```
 
-整理后按工作线阅读；在交互模式中输入工作线编号，可以继续深读。下面使用测试样例说明输出结构，不代表真实模型效果：
+方向键选择，Enter 打开，Esc 返回。列表支持 `/` 搜索；宽终端显示选中项预览，窄终端使用单列。工作线中按 `d` 深读、`s` 查看冻结原文、`e` 导出，长文用方向键和 Space 翻页。返回后保留列表选中项和阅读位置。
+
+浏览时只读取会话与已存结果；选择生成或刷新才使用模型额度。进度页按 Esc 取消并返回，失败后可以查看详情、重试或继续浏览。`agent-note ui --read-only` 全程禁止模型生成。下面使用测试样例说明输出结构，不代表真实模型效果：
 
 ```text
 01  结构化 Today 后端
@@ -95,6 +106,7 @@ Agent 的参与：完成工程实现。
 
 | 想做什么 | 命令 |
 | --- | --- |
+| 进入交互应用 | `agent-note ui` |
 | 看今日工作脉络 | `agent-note brief` |
 | 回看指定日期 | `agent-note brief --date 2026-09-05` |
 | 只看当前项目 | `agent-note brief --project "$PWD"` |
@@ -111,12 +123,12 @@ Agent 的参与：完成工程实现。
 
 ## 为终端与脚本而做
 
-- 无参数、交互终端：像素 logo、大标题和简单菜单；窄终端自动缩小布局。
-- 显式命令：直接输出结果，不插入 logo 或菜单。
-- 管道：进度写入 stderr，结果写入 stdout；`NO_COLOR=1` 关闭首页颜色。
+- 交互应用：键盘菜单、搜索、预览、分页和应用内导出；支持缩放，退出后恢复终端。
+- `brief` 命令：直接输出结果，不插入应用菜单。
+- 管道：进度写入 stderr，结果写入 stdout；`NO_COLOR=1` 关闭界面颜色。
 - JSON：保留原后端 `index`、`dossier`、来源及覆盖情况，便于接入自己的工具。
 
-退出码：`0` 正常完成；`1` 参数、模型或运行失败；`2` 已输出结果但扫描或证据覆盖不完整。空日期正常返回 `index: null`。脚本应同时检查退出码与覆盖信息。
+`brief` 退出码：`0` 正常完成；`1` 参数、模型或运行失败；`2` 已输出结果但扫描或证据覆盖不完整，或来源已变化；`130` 用户中断。空日期正常返回 `index: null`。脚本应同时检查退出码与覆盖信息。
 
 ## 数据在哪里？
 
@@ -140,6 +152,9 @@ brew uninstall agent-note-cli
 ```sh
 npm ci
 npm run check
+
+# macOS / Linux：真实伪终端验收，使用 Python 标准库与假模型
+npm run test:tui
 ```
 
 检查包含 App 原有测试、客户端与直接后端调用的结果对比、类型检查和发布包离线安装。测试使用合成会话与模拟模型响应，不能替代真实模型质量验收。

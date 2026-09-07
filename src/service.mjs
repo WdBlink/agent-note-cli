@@ -6,7 +6,8 @@ import {
   loadAgentWorkSnapshot, DEFAULT_SETTINGS, NodeSqliteSaver,
   TraceinkAssetRepository, projectStructuredTodayReview,
   runStructuredTodayIndexPreparation, runStructuredTodayDossierPreparation,
-  desktopCliRunner, structuredTodaySessionFamilies
+  desktopCliRunner, structuredTodaySessionFamilies, StructuredTodayRuntimeStore,
+  readBoundedTranscriptSource, parseSessionTranscript, sessionUserAuthorKind
 } from '../dist/backend.mjs';
 
 export function validateDate(value) {
@@ -20,6 +21,7 @@ export function today() {
 }
 
 export async function brief(options, dependencies = {}) {
+  options.signal?.throwIfAborted();
   const date = validateDate(options.date ?? today());
   const settings = { ...structuredClone(DEFAULT_SETTINGS), ...(options.settings ?? {}) };
   if (options.roots?.length) settings.sessionScanRoots = options.roots;
@@ -30,9 +32,10 @@ export async function brief(options, dependencies = {}) {
   if (!Array.isArray(settings.enabledSessionProviders) || !settings.enabledSessionProviders.length || settings.enabledSessionProviders.some(p => !['codex', 'claude'].includes(p))) throw new Error('请选择 Codex 或 Claude 会话来源。');
   for (const key of ['codexCliPath', 'claudeCliPath']) if (typeof settings[key] !== 'string' || !settings[key].trim()) throw new Error(`${key} 设置无效。`);
   options.onProgress?.({ stage: 'scan', status: 'running' });
-  const snapshot = await (dependencies.scan ?? loadAgentWorkSnapshot)(settings, {
+  const snapshot = dependencies.snapshot ?? await (dependencies.scan ?? loadAgentWorkSnapshot)(settings, {
     date, fs: { stat: fs.stat, readdir: fs.readdir, readFile: fs.readFile, readBytes: fs.readFile, realpath: fs.realpath }, homeDir: os.homedir()
   });
+  options.signal?.throwIfAborted();
   if (options.project) {
     const project = path.resolve(options.project);
     snapshot.sessions = structuredTodaySessionFamilies(snapshot.sessions).filter(({ root }) => {
@@ -40,6 +43,7 @@ export async function brief(options, dependencies = {}) {
       return p && (p === project || p.startsWith(project + path.sep));
     }).flatMap(family => family.members);
   }
+  dependencies.onSnapshot?.(snapshot);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const scope = createHash('sha256').update(JSON.stringify({ roots, providers: settings.enabledSessionProviders, timeZone, project: options.project ? path.resolve(options.project) : null })).digest('hex').slice(0, 16);
   const dataDir = path.join(options.dataDir ?? path.join(os.homedir(), '.local/share/agent-note'), scope);
@@ -50,15 +54,21 @@ export async function brief(options, dependencies = {}) {
     throw error;
   }
   let checkpointer;
+  let runtimeStore;
+  const runner = request => (dependencies.runner ?? desktopCliRunner)({ ...request, signal: options.signal });
   try {
     const repository = new TraceinkAssetRepository(path.join(dataDir, 'traceink-assets-v1.json'));
     const document = await repository.load();
     let review = projectStructuredTodayReview(document, date, snapshot.sessions);
-    if (!options.readOnly && snapshot.sessions.length && (options.refresh || review.mode !== 'compiled')) {
+    if (options.indexReference && ['artifactId', 'revision', 'contentHash'].some(key => options.indexReference[key] !== review.activeIndexReference?.[key])) {
+      throw new Error('工作线列表已有新版本，请返回列表重新选择。');
+    }
+    if (!options.readOnly && snapshot.sessions.length && (!options.workline || !review.activeIndex) && (options.refresh || review.mode !== 'compiled')) {
       options.onProgress?.({ stage: 'prepare', status: 'running' });
       checkpointer = NodeSqliteSaver.fromConnectionString(path.join(dataDir, 'structured-today-workflows-v1.sqlite'));
-      await checkpointer.prune((document.structuredRuns ?? []).filter(r => r.status === 'ready').map(r => r.runId));
-      await runStructuredTodayIndexPreparation({ logicalDate: date, snapshot, settings, repository, checkpointer, runner: dependencies.runner ?? desktopCliRunner, onProgress: options.onProgress });
+      runtimeStore = new StructuredTodayRuntimeStore(path.join(dataDir, 'structured-today-runtime-v1.sqlite'));
+      await checkpointer.prune(runtimeStore.listRuns().filter(r => r.status === 'ready').map(r => r.runId));
+      await runStructuredTodayIndexPreparation({ logicalDate: date, snapshot, settings, repository, checkpointer, runtimeStore, runner, onProgress: options.onProgress });
       review = projectStructuredTodayReview(await repository.load(), date, snapshot.sessions);
     }
     let dossier;
@@ -68,7 +78,8 @@ export async function brief(options, dependencies = {}) {
       dossier = selected.dossier;
       if (!dossier && !options.readOnly) {
         checkpointer ??= NodeSqliteSaver.fromConnectionString(path.join(dataDir, 'structured-today-workflows-v1.sqlite'));
-        dossier = await runStructuredTodayDossierPreparation({ logicalDate: date, indexReference: review.activeIndexReference, worklineId: selected.workline.worklineId, settings, repository, checkpointer, runner: dependencies.runner ?? desktopCliRunner, onProgress: options.onProgress });
+        runtimeStore ??= new StructuredTodayRuntimeStore(path.join(dataDir, 'structured-today-runtime-v1.sqlite'));
+        dossier = await runStructuredTodayDossierPreparation({ logicalDate: date, indexReference: review.activeIndexReference, worklineId: selected.workline.worklineId, settings, repository, checkpointer, runtimeStore, runner, onProgress: options.onProgress });
       }
       if (!dossier) throw new Error('这条工作线尚未生成深读；移除 --read-only 后可按 App 的相同流程生成。');
     }
@@ -77,7 +88,26 @@ export async function brief(options, dependencies = {}) {
       sessions: snapshot.sessions, evidenceCoverage: snapshot.evidenceCoverage ?? [], warnings: snapshot.warnings,
       diagnostic: review.diagnostic ?? null, dataDir };
   } finally {
-    checkpointer?.close();
-    await fs.rmdir(lock);
+    try { checkpointer?.close(); } finally {
+      try { runtimeStore?.close(); } finally { await fs.rmdir(lock); }
+    }
   }
+}
+
+export async function readSource(view, sourceId) {
+  const evidence = view.index?.evidence.find(e => e.evidenceId === sourceId);
+  const session = view.sessions.find(s => evidence
+    ? s.path === evidence.sourcePath && s.platform === evidence.provider && (!evidence.sessionId || s.id === evidence.sessionId)
+    : `${s.platform}:${s.id}:${s.path}` === sourceId);
+  const end = evidence && /^bytes 0-([1-9]\d*)$/.exec(evidence.range)?.[1];
+  const capture = evidence && end ? {
+    canonicalPath: evidence.sourcePath, sha256: evidence.contentHash, byteLength: Number(end),
+    coverage: { startByte: 0, endByte: Number(end) }
+  } : session?.transcriptCapture;
+  if (!capture) throw new Error('此来源没有可校验的冻结原文。');
+  const source = await readBoundedTranscriptSource(capture.canonicalPath, { origin: 'traceink-asset', transcriptCapture: capture });
+  return parseSessionTranscript({ ...source, platform: evidence?.provider ?? session.platform,
+    userAuthorKind: sessionUserAuthorKind(session ?? {}),
+    sessionId: evidence?.sessionId ?? session?.id ?? sourceId,
+    title: session?.title ?? sourceId, path: capture.canonicalPath });
 }

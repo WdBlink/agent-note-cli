@@ -55,6 +55,7 @@ export interface StructuredTodayModelFunctions {
     worklineJson: string;
     analysisJson: string;
     critiqueJson: string;
+    admittedEvidenceJson: string;
     allowedEvidenceIds: [string, ...string[]];
   }): Promise<StructuredTodayModelResult<DossierCandidate>>;
   arrangeReflectionProposals(input: {
@@ -160,10 +161,10 @@ export function createStructuredTodayModelFunctions(
     analyzeWorklineDossier: async (input) => invoke({
       caller,
       functionName: "AnalyzeWorklineDossier",
-      functionVersion: "AnalyzeWorklineDossier/structured-v3",
+      functionVersion: "AnalyzeWorklineDossier/structured-v4",
       schema: DossierAnalysisCandidateSchema,
       editorialContract: input.editorialContract,
-      instructions: "Analyze only the selected workline and admitted evidence. Preserve supporting and opposing evidence, gaps, and a falsifiable future observation. Evidence claims may cite only exact IDs listed in allowedEvidenceIdsJson. If prose uses bracketed shorthand, [E1] means the first admitted evidence object, [E2] the second, and so on.",
+      instructions: "Analyze only the selected workline and admitted evidence. Use host-supplied frozenContent for factual support; locators identify sources but are not source content. Do not read live source paths. Treat omitted or partial content as an evidence gap. Preserve supporting and opposing evidence, gaps, and a falsifiable future observation. Evidence claims may cite only exact IDs listed in allowedEvidenceIdsJson. If prose uses bracketed shorthand, [E1] means the first admitted evidence object, [E2] the second, and so on.",
       variables: {
         worklineJson: input.worklineJson,
         admittedEvidenceJson: input.admittedEvidenceJson,
@@ -174,10 +175,10 @@ export function createStructuredTodayModelFunctions(
     critiqueWorklineDossier: async (input) => invoke({
       caller,
       functionName: "CritiqueWorklineDossier",
-      functionVersion: "CritiqueWorklineDossier/structured-v1",
+      functionVersion: "CritiqueWorklineDossier/structured-v2",
       schema: DossierCritiqueCandidateSchema,
       editorialContract: input.editorialContract,
-      instructions: "Critique unsupported claims, missing opposing evidence, invented evidence IDs, vague falsification, and hidden gaps.",
+      instructions: "Critique unsupported claims against host-supplied frozenContent, missing opposing evidence, invented evidence IDs, vague falsification, and hidden gaps. Do not read live source paths.",
       variables: {
         analysisJson: input.analysisJson,
         admittedEvidenceJson: input.admittedEvidenceJson
@@ -186,14 +187,15 @@ export function createStructuredTodayModelFunctions(
     composeWorklineDossier: async (input) => invoke({
       caller,
       functionName: "ComposeWorklineDossier",
-      functionVersion: "ComposeWorklineDossier/structured-v3",
+      functionVersion: "ComposeWorklineDossier/structured-v4",
       schema: DossierCandidateSchema,
       editorialContract: input.editorialContract,
-      instructions: "Compose the final selected-workline dossier, address the critique, retain uncertainty, and end with exactly one question requiring the user's judgment. Every evidenceIds value must be copied from allowedEvidenceIdsJson. Critique missingEvidenceIds are requests for unavailable evidence and must never be cited as admitted evidence. If prose uses bracketed shorthand, [E1] means the first admitted evidence object, [E2] the second, and so on; never use an unmapped shorthand.",
+      instructions: "Compose the final selected-workline dossier using host-supplied frozenContent, address the critique, retain uncertainty about omitted content, and end with exactly one question requiring the user's judgment. Every evidenceIds value must be copied from allowedEvidenceIdsJson. Critique missingEvidenceIds are requests for unavailable evidence and must never be cited as admitted evidence. If prose uses bracketed shorthand, [E1] means the first admitted evidence object, [E2] the second, and so on; never use an unmapped shorthand.",
       variables: {
         worklineJson: input.worklineJson,
         analysisJson: input.analysisJson,
         critiqueJson: input.critiqueJson,
+        admittedEvidenceJson: input.admittedEvidenceJson,
         allowedEvidenceIdsJson: JSON.stringify(input.allowedEvidenceIds)
       },
       allowedEvidenceIds: input.allowedEvidenceIds

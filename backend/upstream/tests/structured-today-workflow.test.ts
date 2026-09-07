@@ -280,7 +280,8 @@ test("LangGraph fallback keeps dossier workline-scoped", async () => {
         editorialContract: editorialContract(),
         sourceIndex: index.artifact,
         worklineId: selected.worklineId,
-        linkedEvidence: []
+        linkedEvidence: [],
+        evidenceText: "selected frozen source text"
       },
       threadId: "langgraph-selected-dossier"
     });
@@ -423,7 +424,7 @@ function fakeModels(options: { failDigestSessionIds?: Set<string>; failSynthesis
     async analyzeWorklineDossier(input) {
       state.dossierCalls += 1;
       state.lastDossierEvidence = JSON.parse(input.admittedEvidenceJson);
-      const evidence = state.lastDossierEvidence as Array<{ evidenceId: string }>;
+      const evidence = (state.lastDossierEvidence as { locators: Array<{ evidenceId: string }> }).locators;
       const output: DossierAnalysisCandidate = {
         priorContext: "The structured producer had not yet been cut over.",
         whatHappened: "The selected workline was reconstructed from admitted evidence.",

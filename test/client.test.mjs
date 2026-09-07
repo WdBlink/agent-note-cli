@@ -6,8 +6,8 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { brief, validateDate } from '../src/service.mjs';
-import { home, render } from '../src/presentation.mjs';
-import { loadAgentWorkSnapshot, DEFAULT_SETTINGS, TraceinkAssetRepository, NodeSqliteSaver, runStructuredTodayIndexPreparation, loadTraceinkSkillBundle } from '../dist/backend.mjs';
+import { render } from '../src/presentation.mjs';
+import { loadAgentWorkSnapshot, DEFAULT_SETTINGS, TraceinkAssetRepository, NodeSqliteSaver, StructuredTodayRuntimeStore, runStructuredTodayIndexPreparation, loadTraceinkSkillBundle } from '../dist/backend.mjs';
 import { structuredRunner } from './model-fixture.mjs';
 
 const date = '2026-08-29';
@@ -46,8 +46,10 @@ test('CLI uses identical App workflow, evidence, contract, model stages and save
   assert.equal(snapshot.sessions.length, 1);
   const repository = new TraceinkAssetRepository(path.join(f.dir, 'direct.json'));
   const checkpointer = NodeSqliteSaver.fromConnectionString(':memory:');
+  const runtimeStore = new StructuredTodayRuntimeStore(':memory:');
   t.after(() => checkpointer.close());
-  const direct = await runStructuredTodayIndexPreparation({ logicalDate: date, snapshot, settings: { ...DEFAULT_SETTINGS, enabledSessionProviders: ['codex'] }, repository, checkpointer, runner: delegate });
+  t.after(() => runtimeStore.close());
+  const direct = await runStructuredTodayIndexPreparation({ logicalDate: date, snapshot, settings: { ...DEFAULT_SETTINGS, enabledSessionProviders: ['codex'] }, repository, checkpointer, runtimeStore, runner: delegate });
   for (const key of ['worklines', 'evidence', 'coverage', 'sessions']) assert.deepEqual(view.index[key], direct.artifact[key], key);
   assert.deepEqual(view.index.dispositions.map(({ nodeOutputId, ...d }) => d), direct.artifact.dispositions.map(({ nodeOutputId, ...d }) => d));
   const reopened = await brief(f.options, { runner: async () => { throw new Error('must not call model'); } });
@@ -82,11 +84,7 @@ test('CLI read-only JSON uses original scanner and does not fabricate a summary'
   assert.throws(() => validateDate('2026-02-30'));
 });
 
-test('pixel home is responsive, color optional, exports are clean', () => {
-  assert.match(home({ width: 80 }), /▄▀█/);
-  assert.match(home({ width: 32 }), /AGENT NOTE/);
-  assert.ok(!home().includes('\x1b'));
-  assert.ok(home({ color: true }).includes('\x1b'));
+test('exports stay clean without terminal controls or application chrome', () => {
   const view = { date, timeZone: 'UTC', mode: 'raw', sessions: [], index: null, dossier: null, warnings: ['\x1b[31mwarning\x1b[0m'], evidenceCoverage: [] };
   assert.ok(!render(view).includes('\x1b'));
   assert.ok(!render(view).includes('▄▀█'));

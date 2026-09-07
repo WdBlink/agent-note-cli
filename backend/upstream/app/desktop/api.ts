@@ -18,6 +18,8 @@ import type {
 export type DailyReviewPreparationMode = "compile" | "refresh";
 
 export interface DesktopState {
+  /** Monotonic within the main-process lifetime; absent in legacy fixtures. */
+  stateRevision?: number;
   data: CockpitData;
   activeDate: string;
   activityDates: string[];
@@ -53,6 +55,12 @@ export interface StructuredTodayProgressState {
   index?: StructuredTodayRunProgress;
   dossierByWorklineId: Record<string, StructuredTodayRunProgress>;
   proposalByWorklineId?: Record<string, StructuredTodayRunProgress>;
+}
+
+export interface StructuredTodayProgressUpdate {
+  logicalDate: string;
+  stateRevision: number;
+  progress: StructuredTodayProgressState;
 }
 
 export type NotebookNoteKind = "thought" | "web" | "note";
@@ -354,6 +362,7 @@ export interface DesktopApi {
   copyText(text: string): Promise<boolean>;
   openPath(path: string, reveal?: boolean): Promise<boolean>;
   subscribeState(listener: (state: DesktopState) => void): () => void;
+  subscribeStructuredProgress?(listener: (update: StructuredTodayProgressUpdate) => void): () => void;
 }
 
 declare global {

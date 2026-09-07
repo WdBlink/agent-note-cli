@@ -60,7 +60,7 @@ const DigestResultsValue = new ReducedValue(
   z.array(DigestExecutionResultSchema).default(() => []),
   {
     inputSchema: DigestExecutionResultSchema,
-    reducer: (current, next) => [...current, next]
+    reducer: (current, next) => [...current.filter((item) => digestSessionId(item) !== digestSessionId(next)), next]
   }
 );
 
@@ -123,10 +123,14 @@ export function createStructuredTodayLangGraphIndex(input: {
   const itemStore = workflowItemStore(input.checkpointer);
 
   const dispatch = async () => ({});
-  const routeSessions = (state: typeof IndexState.State) => state.input.sessions.map((item) => new Send(
-    "digest-session",
-    { currentDigestSessionId: item.session.sessionId }
-  ));
+  const routeSessions = (state: typeof IndexState.State) => {
+    const complete = new Set(state.digestResults.filter((item) => item.status !== "failed").map(digestSessionId));
+    const pending = state.input.sessions.filter((item) => !complete.has(item.session.sessionId));
+    return pending.length ? pending.map((item) => new Send(
+      "digest-session",
+      { currentDigestSessionId: item.session.sessionId }
+    )) : "synthesize-index";
+  };
   const digestSession: typeof IndexState.Node = async (state, config) => {
     const sessionId = state.currentDigestSessionId;
     if (!sessionId) throw new Error("LangGraph digest node did not receive a Session reference.");
@@ -199,7 +203,7 @@ export function createStructuredTodayLangGraphIndex(input: {
     .addNode("synthesize-index", synthesize)
     .addNode("validate-index", validate)
     .addEdge(START, "dispatch-sessions")
-    .addConditionalEdges("dispatch-sessions", routeSessions, ["digest-session"])
+    .addConditionalEdges("dispatch-sessions", routeSessions, ["digest-session", "synthesize-index"])
     .addEdge("digest-session", "synthesize-index")
     .addEdge("synthesize-index", "validate-index")
     .addEdge("validate-index", END)
@@ -260,7 +264,7 @@ export function createStructuredTodayLangGraphDossier(input: {
     const result = await dependencies.models.analyzeWorklineDossier({
       editorialContract: state.input.editorialContract,
       worklineJson: JSON.stringify(state.gathered.workline),
-      admittedEvidenceJson: JSON.stringify(state.gathered.evidence),
+      admittedEvidenceJson: JSON.stringify({ locators: state.gathered.evidence, frozenContent: state.input.evidenceText }),
       allowedEvidenceIds: nonEmptyEvidenceIds(state.gathered.evidence.map((item) => item.evidenceId))
     });
     await emitProgress(dependencies, {
@@ -280,7 +284,7 @@ export function createStructuredTodayLangGraphDossier(input: {
     const result = await dependencies.models.critiqueWorklineDossier({
       editorialContract: state.input.editorialContract,
       analysisJson: JSON.stringify(state.analysisEnvelope.analysis),
-      admittedEvidenceJson: JSON.stringify(state.gathered.evidence)
+      admittedEvidenceJson: JSON.stringify({ locators: state.gathered.evidence, frozenContent: state.input.evidenceText })
     });
     await emitProgress(dependencies, {
       stage: "dossier-critique",
@@ -308,6 +312,7 @@ export function createStructuredTodayLangGraphDossier(input: {
       worklineJson: JSON.stringify(state.gathered.workline),
       analysisJson: JSON.stringify(state.critiqueEnvelope.analysis),
       critiqueJson: JSON.stringify(state.critiqueEnvelope.critique),
+      admittedEvidenceJson: JSON.stringify({ locators: state.gathered.evidence, frozenContent: state.input.evidenceText }),
       allowedEvidenceIds: nonEmptyEvidenceIds(state.gathered.evidence.map((item) => item.evidenceId))
     });
     await emitProgress(dependencies, {
@@ -490,6 +495,13 @@ export async function retryStructuredTodayLangGraphIndex(input: {
   threadId: string;
   digestConcurrency: number;
 }): Promise<StructuredTodayIndexWorkflowOutput> {
+  const config = { configurable: { thread_id: input.threadId } };
+  const state = await input.graph.getState(config);
+  if ((state.next.length === 0 && state.values.output && !state.values.output.publishable) ||
+    state.tasks.some((task) => task.name === "validate-index" && task.error)) {
+    await input.graph.registerWorkflowInput(state.values.input, input.threadId);
+    await input.graph.updateState(config, { output: undefined, synthesisEnvelope: undefined }, "dispatch-sessions");
+  }
   const result = await input.graph.invoke(
     null as never,
     {
@@ -499,6 +511,10 @@ export async function retryStructuredTodayLangGraphIndex(input: {
   );
   if (!result.output) throw new Error("LangGraph retried run completed without a structured output.");
   return result.output;
+}
+
+function digestSessionId(result: DigestExecutionResultV1): string {
+  return result.status === "success" ? result.digest.sessionId : result.sessionId;
 }
 
 export async function invokeStructuredTodayLangGraphDossier(input: {
@@ -518,6 +534,11 @@ export async function retryStructuredTodayLangGraphDossier(input: {
   graph: ReturnType<typeof createStructuredTodayLangGraphDossier>;
   threadId: string;
 }): Promise<StructuredTodayDossierWorkflowOutput> {
+  const config = { configurable: { thread_id: input.threadId } };
+  const state = await input.graph.getState(config);
+  if (state.tasks.some((task) => task.name === "validate-dossier" && task.error)) {
+    await input.graph.updateState(config, { composeEnvelope: undefined, output: undefined }, "critique-dossier");
+  }
   const result = await input.graph.invoke(
     null as never,
     { configurable: { thread_id: input.threadId } }
@@ -543,6 +564,11 @@ export async function retryStructuredTodayLangGraphProposals(input: {
   graph: ReturnType<typeof createStructuredTodayLangGraphProposals>;
   threadId: string;
 }): Promise<StructuredTodayProposalWorkflowOutput> {
+  const config = { configurable: { thread_id: input.threadId } };
+  const state = await input.graph.getState(config);
+  if (state.tasks.some((task) => task.name === "validate-reflection-proposals" && task.error)) {
+    await input.graph.updateState(config, { candidate: undefined, invocation: undefined, output: undefined }, START);
+  }
   const result = await input.graph.invoke(
     null as never,
     { configurable: { thread_id: input.threadId } }

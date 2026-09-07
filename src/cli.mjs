@@ -3,12 +3,12 @@ import { parseArgs } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createInterface } from 'node:readline/promises';
-import { clean, home, render } from './presentation.mjs';
+import { clean, render } from './presentation.mjs';
 
 const help = `Agent Note CLI · 与 Agent Notebook 相同的 Today 后端
 
-  agent-note                         像素首页与交互菜单
+  agent-note                         打开交互终端应用
+  agent-note ui --source codex        在应用内浏览、筛选与深读
   agent-note brief                   生成或重开今日工作脉络
   agent-note brief --workline 1       深读第 1 条工作线
   agent-note brief --read-only        只读取已有结果，不调用模型
@@ -34,7 +34,7 @@ const expand = value => path.resolve(value === '~' ? os.homedir() : value.starts
 
 async function main() {
   const { values: v, positionals } = parseArgs({ allowPositionals: true, options: {
-    date: { type: 'string' }, timezone: { type: 'string' }, project: { type: 'string' }, source: { type: 'string', default: 'all' },
+    date: { type: 'string' }, timezone: { type: 'string' }, project: { type: 'string' }, source: { type: 'string' },
     root: { type: 'string', multiple: true }, settings: { type: 'string' }, 'data-dir': { type: 'string' },
     'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
     format: { type: 'string', default: 'text' }, workline: { type: 'string' },
@@ -43,29 +43,17 @@ async function main() {
   } });
   if (v.help) return void process.stdout.write(help);
   if (v.version) return void process.stdout.write(JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url))).version + '\n');
-  if (positionals.length > 1 || (positionals[0] && positionals[0] !== 'brief')) throw new Error('未知命令。请运行 agent-note --help。');
+  if (positionals.length > 1 || (positionals[0] && !['brief', 'ui'].includes(positionals[0]))) throw new Error('未知命令。请运行 agent-note --help。');
   if (!['text', 'markdown', 'json'].includes(v.format)) throw new Error('--format 必须为 text、markdown 或 json。');
-  if (!['all', 'codex', 'claude'].includes(v.source)) throw new Error('--source 必须为 all、codex 或 claude。');
+  if (v.source && !['all', 'codex', 'claude'].includes(v.source)) throw new Error('--source 必须为 all、codex 或 claude。');
   if (v['read-only'] && v.refresh) throw new Error('--read-only 与 --refresh 不能同时使用。');
   if (v.timezone) {
     new Intl.DateTimeFormat('en', { timeZone: v.timezone }).format();
     process.env.TZ = v.timezone;
   }
-  const interactive = process.argv.length === 2 && process.stdin.isTTY && process.stdout.isTTY;
+  if (positionals[0] === 'ui' && (v.format !== 'text' || v.workline || v.refresh)) throw new Error('ui 内使用菜单生成、深读和导出；这些参数请配合 brief 命令使用。');
+  const interactive = positionals[0] === 'ui' || (!positionals[0] && !v.workline && !v.refresh && v.format === 'text' && process.stdin.isTTY && process.stdout.isTTY && process.env.TERM !== 'dumb');
   if (process.argv.length === 2 && !interactive) return void process.stdout.write(help);
-  const localDate = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  async function ask(prompt) {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    try { return (await rl.question(prompt)).trim(); } finally { rl.close(); }
-  }
-  if (interactive) {
-    process.stdout.write(home({ width: process.stdout.columns, color: process.env.NO_COLOR === undefined, date: localDate }));
-    const choice = await ask('  选择 [1/2/3/q] › ');
-    if (!choice || choice === 'q') return;
-    if (choice === '3') return void process.stdout.write(help);
-    if (!['1', '2'].includes(choice)) throw new Error('请输入 1、2、3 或 q。');
-    v['read-only'] = choice === '2';
-  }
   if (v['codex-model']) process.env.AGENT_NOTEBOOK_TODAY_CODEX_MODEL = v['codex-model'];
   if (v['claude-model']) process.env.AGENT_NOTEBOOK_TODAY_CLAUDE_MODEL = v['claude-model'];
   let settings;
@@ -84,15 +72,22 @@ async function main() {
       process.stderr.write(clean(`  ${progress.status === 'ready' ? '✓' : '·'} ${labels[progress.stage] ?? progress.stage}${progress.sessionId ? ' · ' + progress.sessionId : ''}\n`));
     }
   };
-  let view = await brief(options);
-  process.stdout.write(render(view, v.format));
-  while (interactive && view.index?.worklines.length) {
-    const choice = await ask('\n  输入工作线编号深读，或 q 退出 › ');
-    if (!choice || choice === 'q') break;
-    view = await brief({ ...options, refresh: false, workline: choice });
-    process.stdout.write(render(view, v.format));
+  if (interactive) {
+    const { runInteractive } = await import('./interactive.mjs');
+    return runInteractive(options);
   }
-  if (view.warnings.length || view.evidenceCoverage.some(e => ['failed', 'truncated'].includes(e.disposition)) || (view.index && !view.index.coverage.complete)) process.exitCode = 2;
+  const controller = new AbortController();
+  const stop = () => { process.exitCode = 130; controller.abort(); };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  try {
+    const view = await brief({ ...options, signal: controller.signal });
+    process.stdout.write(render(view, v.format));
+    if (view.mode === 'stale' || view.warnings.length || view.evidenceCoverage.some(e => ['failed', 'truncated'].includes(e.disposition)) || (view.index && !view.index.coverage.complete)) process.exitCode = 2;
+  } finally {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+  }
 }
 process.stdout.on('error', error => { if (error.code === 'EPIPE') process.exit(0); else throw error; });
-main().catch(error => { process.stderr.write(`agent-note: ${clean(error.message)}\n`); process.exitCode = 1; });
+main().catch(error => { process.stderr.write(`agent-note: ${clean(error.message)}\n`); process.exitCode ||= 1; });

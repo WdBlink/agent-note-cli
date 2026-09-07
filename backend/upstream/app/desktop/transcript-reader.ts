@@ -184,7 +184,7 @@ function message(id: unknown, index: number, role: "user" | "assistant", content
     id: typeof id === "string" && id ? id : `message-${index}`,
     role,
     authorKind: role === "assistant" ? "agent" : userAuthorKind,
-    content: content.length > MAX_MESSAGE_CHARACTERS ? `${content.slice(0, MAX_MESSAGE_CHARACTERS)}\n\n[这条消息过长，后续内容已省略]` : content
+    content
   };
   if (timestamp) value.timestamp = timestamp;
   return value;
@@ -220,13 +220,17 @@ function deduplicateMessages(messages: SessionTranscriptMessage[]): SessionTrans
 
 function limitMessages(messages: SessionTranscriptMessage[]): { messages: SessionTranscriptMessage[]; truncated: boolean } {
   let total = 0;
+  let truncated = false;
   const kept: SessionTranscriptMessage[] = [];
   for (const item of messages) {
-    if (total + item.content.length > MAX_TOTAL_CHARACTERS) return { messages: kept, truncated: true };
-    kept.push(item);
-    total += item.content.length;
+    const oversized = item.content.length > MAX_MESSAGE_CHARACTERS;
+    const content = oversized ? `${item.content.slice(0, MAX_MESSAGE_CHARACTERS)}\n\n[这条消息过长，后续内容已省略]` : item.content;
+    if (total + content.length > MAX_TOTAL_CHARACTERS) return { messages: kept, truncated: true };
+    kept.push(oversized ? { ...item, content } : item);
+    truncated ||= oversized;
+    total += content.length;
   }
-  return { messages: kept, truncated: false };
+  return { messages: kept, truncated };
 }
 
 function normalizeRole(value: unknown): "user" | "assistant" | undefined {

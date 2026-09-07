@@ -13,6 +13,7 @@ import {
 import type { TraceinkArtifactReferenceV1, TraceinkArtifactV1 } from "../../src/traceink-review-assets";
 import type { AgentPlatform, AgentTranscriptCapture, AgentWorkSession } from "../../src/types";
 import type { DailyReviewEvidence } from "../../src/workline-review";
+import { structuredTranscriptEvidence } from "../../src/session-family";
 
 export interface AuthorizedSessionTranscriptReference {
   id: string;
@@ -88,8 +89,8 @@ function authorizeStructuredTodayTranscript(
     throw new Error("这条证据不属于该日期当前结构化工作脉络，拒绝读取。");
   }
   const index = findStructuredTodayIndex(document, active);
-  const evidence = index?.evidence.find((candidate) => candidate.evidenceId === requested.evidenceId);
-  if (!index || !evidence || evidence.sourceKind !== "session") {
+  const evidence = structuredTranscriptEvidence(index?.evidence.find((candidate) => candidate.evidenceId === requested.evidenceId));
+  if (!index || !evidence || !index.sessions.some((session) => session.evidenceIds.includes(evidence.evidenceId))) {
     throw new Error("结构化工作脉络中找不到指定 Session 证据。");
   }
   if (
@@ -101,7 +102,7 @@ function authorizeStructuredTodayTranscript(
   }
   const match = /^bytes 0-(\d+)$/.exec(evidence.range ?? "");
   const byteLength = match ? Number(match[1]) : Number.NaN;
-  if (!path.isAbsolute(evidence.sourcePath) || !Number.isSafeInteger(byteLength) || byteLength < 0) {
+  if (!path.isAbsolute(evidence.sourcePath) || evidence.sourcePath.includes("\0") || !Number.isSafeInteger(byteLength) || byteLength < 0 || !/^[a-f0-9]{64}$/.test(evidence.contentHash)) {
     throw new Error("结构化 Session 证据的冻结路径或范围无效，拒绝读取。");
   }
   return {

@@ -1320,7 +1320,7 @@ function normalizeStructuredRuns(value: unknown): StructuredTodayRunRecordV1[] {
     .slice(-200);
 }
 
-function normalizeStructuredRun(value: unknown): StructuredTodayRunRecordV1 | undefined {
+export function normalizeStructuredRun(value: unknown): StructuredTodayRunRecordV1 | undefined {
   const raw = asRecord(value);
   const runId = typeof raw?.runId === "string" ? raw.runId.trim() : "";
   const kind = raw?.kind === "index" || raw?.kind === "dossier" || raw?.kind === "proposals" ? raw.kind : undefined;

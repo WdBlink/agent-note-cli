@@ -12,6 +12,7 @@ CLI 没有自己的会话解析器、摘要 prompt、工作线算法或降级版
 | 有界并发、合成、校验和重试 | `src/structured-today-langgraph.ts` |
 | 正式准备与发布、指定工作线深读 | `app/desktop/structured-today-runtime.ts` |
 | 原子保存、版本、工作流恢复 | `traceink-asset-repository.ts` + `langgraph-node-sqlite-checkpointer.ts` |
+| 运行状态与成功摘要缓存 | `structured-today-runtime-store.ts` |
 | 读取已有结果、判断证据变化 | `src/structured-today-review-state.ts` |
 | 模型分配和进程调用 | `structured-today-cli-caller.ts` + `cli-runner.ts` |
 
@@ -30,11 +31,14 @@ JSON 中的 `index` 保留原始 `today-workline-index/v1` 产物，包括工作
 
 CLI 当前开放 Today 的工作脉络与按需深读。Wiki 编辑、反思写入、提案采纳和封页没有命令入口；它们不是用另一套简化逻辑替代实现。
 
+交互界面在 `src/interactive.mjs` 组织页面流程，`src/terminal.mjs` 负责键盘、终端单元宽度、分页和生命周期。两者使用 Node 标准库，不增加运行时 UI 框架。原文阅读仍调用共享的冻结范围阅读器与 transcript parser。React 与图标包仅是同步后端引用测试的开发依赖，不进入发布包。
+
 ## 本地开发与验证
 
 ```sh
 npm ci
 npm run check
+npm run test:tui # macOS/Linux + Python 3，真实 PTY 与假 Provider
 ```
 
 测试目录包括导入的 App 测试、客户端与直接后端的等价性测试，以及带空 npm 缓存的离线安装检查。后端原文件与 contract 哈希不变；客户端测试允许独立运行产生不同 invocation UUID。

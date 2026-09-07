@@ -1,14 +1,6 @@
 import { stripVTControlCharacters } from 'node:util';
 export const clean = text => stripVTControlCharacters(String(text)).replace(/[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, '');
 
-export function home({ width = 80, color = false, date = '' } = {}) {
-  const ink = value => color ? `\x1b[38;5;147m${value}\x1b[0m` : value;
-  const logo = ['  ▄▄▄▄▄▄▄▄', '  █ ▄▄▄▄ █', '  █ ▄▄   █', '  █ ▄▄▄  █', '  █     ▄█', '  ▀▀▀▀▀▀▀'];
-  const title = ['▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀', '█▀█ █▄█ ██▄ █░▀█ ░█░', '', '█▄░█ █▀█ ▀█▀ █▀▀', '█░▀█ █▄█ ░█░ ██▄', ''];
-  const art = width >= 48 ? logo.map((line, i) => `${line}    ${title[i]}`).join('\n') : logo.join('\n') + '\n\n  AGENT NOTE';
-  return '\n' + ink(art) + `\n\n  今天，和 AI 一起推进了什么？\n  ${date} · Codex + Claude Code\n\n  ${'─'.repeat(Math.max(12, Math.min(54, width - 4)))}\n\n  1  今日 brief      整理工作脉络\n  2  阅读已有 brief   不调用模型\n  3  帮助             命令与导出\n  q  退出\n\n`;
-}
-
 export function render(view, format = 'text') {
   if (format === 'json') return JSON.stringify(view, null, 2) + '\n';
   const md = format === 'markdown';

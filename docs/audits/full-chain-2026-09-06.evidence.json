@@ -1,0 +1,102 @@
+{
+  "commit": "0a531599b6fbafd66a25920dfc047c0b5ff1f4ed",
+  "date": "2026-09-06",
+  "check": {
+    "passed": 46,
+    "failed": 0
+  },
+  "parityFiles": 49,
+  "auditProbes": {
+    "passed": 12,
+    "failed": 0,
+    "meaning": "Assertions confirm observed defects/limitations, not fixed behavior."
+  },
+  "results": [
+    {
+      "probe": "terminal-retry",
+      "firstCalls": 1,
+      "retryCalls": 0,
+      "stillFails": true
+    },
+    {
+      "probe": "dossier-grounding",
+      "sourceDeleted": true,
+      "frozenTextInDossierPrompts": false,
+      "dossierCalls": 3,
+      "published": true,
+      "staleReadExit": 0
+    },
+    {
+      "probe": "evidence-budget",
+      "cap": 240000,
+      "characters": 1372629,
+      "originalMessages": 4000,
+      "outputMessages": 8001,
+      "uniqueIds": 4001
+    },
+    {
+      "probe": "message-truncation",
+      "original": 81000,
+      "retained": 80018,
+      "truncated": false
+    },
+    {
+      "probe": "date-boundary",
+      "requested": "2026-08-29",
+      "laterFactDate": "2026-08-30",
+      "laterFactInDigest": true,
+      "coverage": "complete"
+    },
+    {
+      "probe": "critique-gate",
+      "critiqueAcceptable": false,
+      "finalSemantic": "passed",
+      "issueShownInText": false
+    },
+    {
+      "probe": "historical-scan",
+      "existingTarget": 1,
+      "newerFiles": 90,
+      "returned": 0,
+      "reportsTruncation": true
+    },
+    {
+      "probe": "project-cap",
+      "targetSessions": 1,
+      "unrelatedSessions": 48,
+      "returned": 0
+    },
+    {
+      "probe": "workline-selection",
+      "displayedFirst": "workline-A",
+      "selectedByOne": "workline-B",
+      "autoRefreshed": true
+    },
+    {
+      "probe": "signal-lock",
+      "signal": "SIGINT to process group",
+      "lockRemains": true,
+      "readOnlyBlocked": true
+    },
+    {
+      "probe": "provider-default",
+      "corpus": [
+        "claude"
+      ],
+      "digest": "claude",
+      "synthesis": "codex",
+      "critique": "claude"
+    },
+    {
+      "probe": "digest-reuse",
+      "firstCalls": 2,
+      "plainReopenCalls": 0,
+      "unchangedRefreshCalls": 2
+    }
+  ],
+  "limits": [
+    "synthetic transcripts and fake providers",
+    "no production performance benchmark",
+    "no product code fixes"
+  ]
+}

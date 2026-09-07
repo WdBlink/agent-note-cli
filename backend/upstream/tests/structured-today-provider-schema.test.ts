@@ -74,6 +74,7 @@ test("dossier compose schema admits only exact gathered evidence IDs", async () 
     },
     worklineJson: "{}",
     analysisJson: "{}",
+    admittedEvidenceJson: "[]",
     critiqueJson: JSON.stringify({ missingEvidenceIds: ["critique-json"] }),
     allowedEvidenceIds: ["evidence-1"]
   });

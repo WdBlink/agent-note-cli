@@ -32,12 +32,18 @@ import {
   structuredTodayDossierArtifactId,
   structuredTodayIndexArtifactId,
   structuredTodayProposalArtifactId,
-  upsertStructuredTodayRun,
   type StructuredTodayRunRecordV1,
   type StructuredTodayIndexReferenceV1
 } from "./traceink-asset-store";
+import { StructuredTodayRuntimeStore } from "./structured-today-runtime-store";
 import type { TraceinkAssetRepository } from "./traceink-asset-repository";
-import { buildStructuredTodayIndexInput, structuredTodaySessionFamilies } from "./structured-today-input";
+import { boundedEvidenceJson, buildStructuredTodayIndexInput, structuredTodaySessionFamilies } from "./structured-today-input";
+import { authorizeSessionTranscriptRequest } from "./session-transcript-access";
+import { createEmptyNotebookDocument } from "./notebook-store";
+import { readBoundedTranscriptSource } from "./transcript-source-reader";
+import { parseSessionTranscript } from "./transcript-reader";
+import { structuredTranscriptEvidence } from "../../src/session-family";
+import { sessionUserAuthorKind } from "./session-authority";
 import {
   createStructuredTodayCliCaller,
   freezeStructuredTodayProviderPlan
@@ -49,6 +55,7 @@ export async function runStructuredTodayIndexPreparation(input: {
   settings: CockpitSettings;
   repository: Pick<TraceinkAssetRepository, "load" | "mutate">;
   checkpointer: BaseCheckpointSaver;
+  runtimeStore: StructuredTodayRuntimeStore;
   runner: CliRunner;
   onProgress?: (progress: StructuredTodayWorkflowProgressV1) => void | Promise<void>;
 }): Promise<{ artifact: TodayWorklineIndexV1; reference: StructuredTodayIndexReferenceV1 }> {
@@ -94,14 +101,25 @@ export async function runStructuredTodayIndexPreparation(input: {
     plan,
     runner: input.runner
   }));
-  const startedAt = starting.structuredRuns?.find((run) => run.runId === workflowRunId)?.startedAt ?? new Date().toISOString();
+  const digest = models.digestSession;
+  models.digestSession = async (request) => {
+    const provider = plan.digestBySessionId[request.expectedSessionId]!;
+    const key = sha256Text(JSON.stringify({ version: STRUCTURED_TODAY_WORKFLOW_VERSION,
+      provider, model: plan.models[provider], request }));
+    const cached = input.runtimeStore.getDigest(key);
+    if (cached) return cached;
+    const result = await digest(request);
+    input.runtimeStore.saveDigest(key, result);
+    return result;
+  };
+  const startedAt = input.runtimeStore.getRun(workflowRunId)?.startedAt ?? new Date().toISOString();
   const total = workflowInput.sessions.length + 2;
   const persistProgress = async (progress: StructuredTodayWorkflowProgressV1): Promise<void> => {
-    const previous = (await input.repository.load()).structuredRuns?.find((run) => run.runId === workflowRunId);
+    const previous = input.runtimeStore.getRun(workflowRunId);
     const terminalDigest = progress.stage === "digest" &&
       (progress.status === "ready" || progress.status === "failed" || progress.status === "excluded");
     const synthesisReady = progress.stage === "index-synthesis" && progress.status === "ready";
-    await persistRun(input.repository, {
+    await persistRun(input.runtimeStore, {
       runId: workflowRunId,
       kind: "index",
       logicalDate: input.logicalDate,
@@ -114,7 +132,7 @@ export async function runStructuredTodayIndexPreparation(input: {
     });
     await input.onProgress?.(progress);
   };
-  await persistRun(input.repository, {
+  await persistRun(input.runtimeStore, {
     runId: workflowRunId,
     kind: "index",
     logicalDate: input.logicalDate,
@@ -149,7 +167,7 @@ export async function runStructuredTodayIndexPreparation(input: {
     const reference = activeStructuredTodayIndexReferenceForDate(document, input.logicalDate);
     const artifact = reference ? findStructuredTodayIndex(document, reference) : undefined;
     if (!reference || !artifact) throw new Error("Structured Today index was saved but could not be reopened.");
-    await persistRun(input.repository, {
+    await persistRun(input.runtimeStore, {
       runId: workflowRunId,
       kind: "index",
       logicalDate: input.logicalDate,
@@ -163,8 +181,8 @@ export async function runStructuredTodayIndexPreparation(input: {
     await cleanupPublishedCheckpoint(input.checkpointer, workflowRunId);
     return { artifact, reference };
   } catch (error) {
-    const previous = (await input.repository.load()).structuredRuns?.find((run) => run.runId === workflowRunId);
-    await persistRun(input.repository, {
+    const previous = input.runtimeStore.getRun(workflowRunId);
+    await persistRun(input.runtimeStore, {
       runId: workflowRunId,
       kind: "index",
       logicalDate: input.logicalDate,
@@ -189,6 +207,7 @@ export async function runStructuredTodayDossierPreparation(input: {
   settings: CockpitSettings;
   repository: Pick<TraceinkAssetRepository, "load" | "mutate">;
   checkpointer: BaseCheckpointSaver;
+  runtimeStore: StructuredTodayRuntimeStore;
   runner: CliRunner;
   onProgress?: (progress: StructuredTodayWorkflowProgressV1) => void | Promise<void>;
 }): Promise<TodayWorklineDossierV1> {
@@ -224,11 +243,11 @@ export async function runStructuredTodayDossierPreparation(input: {
     plan,
     runner: input.runner
   }));
-  const startedAt = starting.structuredRuns?.find((run) => run.runId === workflowRunId)?.startedAt ?? new Date().toISOString();
+  const startedAt = input.runtimeStore.getRun(workflowRunId)?.startedAt ?? new Date().toISOString();
   const total = 4;
   const persistProgress = async (progress: StructuredTodayWorkflowProgressV1): Promise<void> => {
-    const previous = (await input.repository.load()).structuredRuns?.find((run) => run.runId === workflowRunId);
-    await persistRun(input.repository, {
+    const previous = input.runtimeStore.getRun(workflowRunId);
+    await persistRun(input.runtimeStore, {
       runId: workflowRunId,
       kind: "dossier",
       logicalDate: input.logicalDate,
@@ -242,7 +261,7 @@ export async function runStructuredTodayDossierPreparation(input: {
     });
     await input.onProgress?.(progress);
   };
-  await persistRun(input.repository, {
+  await persistRun(input.runtimeStore, {
     runId: workflowRunId,
     kind: "dossier",
     logicalDate: input.logicalDate,
@@ -275,7 +294,8 @@ export async function runStructuredTodayDossierPreparation(input: {
             editorialContract,
             sourceIndex: index,
             worklineId: input.worklineId,
-            linkedEvidence: []
+            linkedEvidence: [],
+            evidenceText: await readDossierEvidence(index, input.worklineId, starting)
           },
           threadId: workflowRunId
         });
@@ -284,7 +304,7 @@ export async function runStructuredTodayDossierPreparation(input: {
     );
     const dossier = latestStructuredTodayDossier(document, active, input.worklineId);
     if (!dossier) throw new Error("Structured Today dossier was saved but could not be reopened.");
-    await persistRun(input.repository, {
+    await persistRun(input.runtimeStore, {
       runId: workflowRunId,
       kind: "dossier",
       logicalDate: input.logicalDate,
@@ -299,8 +319,8 @@ export async function runStructuredTodayDossierPreparation(input: {
     await cleanupPublishedCheckpoint(input.checkpointer, workflowRunId);
     return dossier;
   } catch (error) {
-    const previous = (await input.repository.load()).structuredRuns?.find((run) => run.runId === workflowRunId);
-    await persistRun(input.repository, {
+    const previous = input.runtimeStore.getRun(workflowRunId);
+    await persistRun(input.runtimeStore, {
       runId: workflowRunId,
       kind: "dossier",
       logicalDate: input.logicalDate,
@@ -319,6 +339,36 @@ export async function runStructuredTodayDossierPreparation(input: {
   }
 }
 
+async function readDossierEvidence(
+  index: TodayWorklineIndexV1,
+  worklineId: string,
+  document: Awaited<ReturnType<TraceinkAssetRepository["load"]>>
+): Promise<string> {
+  const workline = index.worklines.find((item) => item.worklineId === worklineId)!;
+  const sources = [];
+  for (const evidenceId of workline.evidenceIds) {
+    const locator = structuredTranscriptEvidence(index.evidence.find((item) => item.evidenceId === evidenceId));
+    if (!locator) throw new Error(`无法读取工作线的冻结证据：${evidenceId}`);
+    const reference = authorizeSessionTranscriptRequest({ id: locator.sessionId, platform: locator.provider,
+      path: locator.sourcePath, structuredTodayRef: { artifactId: index.artifactId, revision: index.revision,
+        contentHash: index.contentHash, logicalDate: index.logicalDate, evidenceId } }, [], createEmptyNotebookDocument(), document);
+    const source = await readBoundedTranscriptSource(reference.readPath, reference);
+    const session = index.sessions.find((item) => item.sessionId === locator.sessionId && item.provider === locator.provider);
+    const transcript = parseSessionTranscript({ content: source.content, truncated: source.truncated,
+      platform: locator.provider, sessionId: locator.sessionId, title: reference.title, path: reference.path,
+      userAuthorKind: session ? sessionUserAuthorKind(session) : "agent" });
+    if (!transcript.messages.length) throw new Error(`冻结证据没有可读消息：${evidenceId}`);
+    const bounded = { evidenceId, coverage: transcript.truncated ? "partial" : "complete",
+      warning: transcript.warning ?? null, messages: transcript.messages.map((message) => ({ ...message, evidenceId })) };
+    sources.push(JSON.parse(boundedEvidenceJson(bounded)) as typeof bounded);
+  }
+  return boundedEvidenceJson({
+    coverage: sources.some((source) => source.coverage !== "complete") ? "partial" : "complete",
+    sources: sources.map(({ messages: _messages, ...source }) => source),
+    messages: sources.flatMap((source) => source.messages)
+  });
+}
+
 export async function runStructuredTodayProposalPreparation(input: {
   logicalDate: string;
   indexReference: StructuredTodayIndexReferenceV1;
@@ -327,6 +377,7 @@ export async function runStructuredTodayProposalPreparation(input: {
   settings: CockpitSettings;
   repository: Pick<TraceinkAssetRepository, "load" | "mutate">;
   checkpointer: BaseCheckpointSaver;
+  runtimeStore: StructuredTodayRuntimeStore;
   runner: CliRunner;
   onProgress?: (progress: StructuredTodayWorkflowProgressV1) => void | Promise<void>;
 }): Promise<StructuredTodayProposalArtifactV1> {
@@ -368,9 +419,9 @@ export async function runStructuredTodayProposalPreparation(input: {
     plan,
     runner: input.runner
   }));
-  const startedAt = starting.structuredRuns?.find((run) => run.runId === workflowRunId)?.startedAt ?? new Date().toISOString();
+  const startedAt = input.runtimeStore.getRun(workflowRunId)?.startedAt ?? new Date().toISOString();
   const persistProgress = async (progress: StructuredTodayWorkflowProgressV1): Promise<void> => {
-    await persistRun(input.repository, {
+    await persistRun(input.runtimeStore, {
       runId: workflowRunId,
       kind: "proposals",
       logicalDate: input.logicalDate,
@@ -384,7 +435,7 @@ export async function runStructuredTodayProposalPreparation(input: {
     });
     await input.onProgress?.(progress);
   };
-  await persistRun(input.repository, {
+  await persistRun(input.runtimeStore, {
     runId: workflowRunId,
     kind: "proposals",
     logicalDate: input.logicalDate,
@@ -425,7 +476,7 @@ export async function runStructuredTodayProposalPreparation(input: {
     );
     const proposals = latestStructuredTodayProposals(document, currentReflection);
     if (!proposals) throw new Error("Structured Today proposals were saved but could not be reopened.");
-    await persistRun(input.repository, {
+    await persistRun(input.runtimeStore, {
       runId: workflowRunId,
       kind: "proposals",
       logicalDate: input.logicalDate,
@@ -440,7 +491,7 @@ export async function runStructuredTodayProposalPreparation(input: {
     await cleanupPublishedCheckpoint(input.checkpointer, workflowRunId);
     return proposals;
   } catch (error) {
-    await persistRun(input.repository, {
+    await persistRun(input.runtimeStore, {
       runId: workflowRunId,
       kind: "proposals",
       logicalDate: input.logicalDate,
@@ -488,10 +539,10 @@ function sameReference(
 }
 
 async function persistRun(
-  repository: Pick<TraceinkAssetRepository, "mutate">,
+  store: StructuredTodayRuntimeStore,
   record: StructuredTodayRunRecordV1
 ): Promise<void> {
-  await repository.mutate((document) => upsertStructuredTodayRun(document, record));
+  store.saveRun(record);
 }
 
 function errorMessage(error: unknown): string {

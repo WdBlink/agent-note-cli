@@ -9,7 +9,7 @@ const Provider = z.enum(["codex", "claude"]);
 
 export const STRUCTURED_TODAY_INDEX_SCHEMA = "today-workline-index/v1" as const;
 export const STRUCTURED_TODAY_DOSSIER_SCHEMA = "today-workline-dossier/v1" as const;
-export const STRUCTURED_TODAY_WORKFLOW_VERSION = "structured-today-workflow-v7-family-digests" as const;
+export const STRUCTURED_TODAY_WORKFLOW_VERSION = "structured-today-workflow-v8-frozen-evidence" as const;
 
 export const TodaySessionLineageSchema = z.object({
   origin: z.enum(["primary", "subagent", "automation", "unknown"]),
@@ -330,7 +330,8 @@ export const StructuredTodayDossierWorkflowInputSchema = z.object({
   editorialContract: EditorialContractBindingSchema,
   sourceIndex: TodayWorklineIndexSchema,
   worklineId: NonEmptyString,
-  linkedEvidence: z.array(EvidenceLocatorSchema)
+  linkedEvidence: z.array(EvidenceLocatorSchema),
+  evidenceText: NonEmptyString
 }).strict();
 
 export const StructuredTodayDossierWorkflowOutputSchema = z.object({

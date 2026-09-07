@@ -335,28 +335,36 @@ export async function buildStructuredTodayIndexInputV2(
   });
 }
 
-function boundedEvidenceJson(value: {
-  coverage: string;
-  omittedToolEvents: number;
-  warning: string | null;
-  metadata: ReturnType<typeof sessionMetadata>;
-  family?: { primarySessionId: string; childSessionIds: string[] };
-  members?: Array<Record<string, unknown>>;
+export function boundedEvidenceJson<T extends {
   messages: Array<{ id: string; role: "user" | "assistant"; content: string; timestamp?: string }>;
-}): string {
+}>(value: T): string {
   const exact = JSON.stringify(value);
   if (exact.length <= MAX_MODEL_EVIDENCE_CHARACTERS) return exact;
-  const budget = MAX_MODEL_EVIDENCE_CHARACTERS - 2_000;
-  const headBudget = Math.floor(budget / 3);
-  const tailBudget = budget - headBudget;
-  const head = takeMessages(value.messages, headBudget, false);
-  const tail = takeMessages(value.messages, tailBudget, true);
-  return JSON.stringify({
+  const omission = { id: "structured-today-omission", role: "assistant" as const, content: "[中间消息因模型输入预算省略]" };
+  const partial = {
     ...value,
     coverage: "partial",
     warning: "Model input budget retained the earliest and latest conversation messages; middle messages were omitted.",
-    messages: [...head, { id: "structured-today-omission", role: "assistant" as const, content: "[中间消息因模型输入预算省略]" }, ...tail]
+    messages: [omission]
+  };
+  const budget = MAX_MODEL_EVIDENCE_CHARACTERS - JSON.stringify(partial).length;
+  if (budget < 0) throw new Error("Session metadata exceeds the model evidence budget.");
+  const costs = value.messages.map((message) => JSON.stringify(message).length + 1);
+  let headEnd = 0;
+  let used = 0;
+  while (headEnd < costs.length && used + costs[headEnd]! <= Math.floor(budget / 3)) {
+    used += costs[headEnd++]!;
+  }
+  let tailStart = costs.length;
+  while (tailStart > headEnd && used + costs[tailStart - 1]! <= budget) {
+    used += costs[--tailStart]!;
+  }
+  const bounded = JSON.stringify({
+    ...partial,
+    messages: [...value.messages.slice(0, headEnd), omission, ...value.messages.slice(tailStart)]
   });
+  if (bounded.length > MAX_MODEL_EVIDENCE_CHARACTERS) throw new Error("Model evidence exceeds its serialized budget.");
+  return bounded;
 }
 
 export interface StructuredTodaySessionFamily {
@@ -394,22 +402,6 @@ export function structuredTodaySessionFamilies(
   }));
 }
 
-
-function takeMessages(
-  messages: Array<{ id: string; role: "user" | "assistant"; content: string; timestamp?: string }>,
-  budget: number,
-  fromEnd: boolean
-) {
-  const source = fromEnd ? [...messages].reverse() : messages;
-  const kept: typeof messages = [];
-  let used = 0;
-  for (const message of source) {
-    if (used + message.content.length > budget) break;
-    kept.push(message);
-    used += message.content.length;
-  }
-  return fromEnd ? kept.reverse() : kept;
-}
 
 function sessionMetadata(session: AgentWorkSession) {
   return {

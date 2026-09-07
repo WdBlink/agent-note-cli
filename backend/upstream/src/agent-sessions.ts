@@ -69,6 +69,7 @@ interface CandidateFile {
   platform: AgentPlatform;
   updatedAt: string;
   sortTime: number;
+  targetDay: boolean;
 }
 
 interface CandidateCollection {
@@ -146,7 +147,7 @@ export async function loadAgentWorkSnapshot(
   const seen = new Map<string, string>();
   let warnings: string[] = [];
   const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
-  const ordered = candidates.sort((a, b) => b.sortTime - a.sortTime);
+  const ordered = candidates.sort((a, b) => Number(b.targetDay) - Number(a.targetDay) || b.sortTime - a.sortTime);
   const sorted = ordered.slice(0, maxFiles);
   for (const candidate of ordered.slice(maxFiles)) {
     evidenceCoverage.push({
@@ -220,6 +221,8 @@ export async function loadAgentWorkSnapshot(
   }
 
   const generatedAt = (options.now ?? new Date()).toISOString();
+  const incomplete = evidenceCoverage.filter((item) => item.disposition === "truncated" || item.disposition === "failed").length;
+  if (incomplete) warnings = [`发现范围不完整：${incomplete} 项读取失败或达到扫描上限；工作线覆盖率仅针对已纳入的会话。`, ...warnings].slice(0, 8);
   return {
     date,
     generatedAt,
@@ -397,7 +400,7 @@ export function previousLocalDateString(now = new Date()): string {
 async function collectCandidateFiles(
   root: string,
   platform: AgentPlatform,
-  day: { start: number; end: number; stamp: string },
+  day: ActivityWindow,
   fs: RuntimeFileSystem,
   limits: { maxFiles: number; maxDepth: number; maxEntries: number }
 ): Promise<CandidateCollection> {
@@ -425,7 +428,9 @@ async function collectCandidateFiles(
       return;
     }
 
-    for (const entry of entries.sort().reverse()) {
+    const preferred = (entry: string) => entry.includes(day.stamp) ||
+      (platform === "codex" && isCodexDateDirectory(joinPath(dir, entry), day.stamp));
+    for (const entry of entries.sort((a, b) => Number(preferred(b)) - Number(preferred(a)) || b.localeCompare(a))) {
       if (files.length >= limits.maxFiles || inspected >= limits.maxEntries) {
         truncated = true;
         return;
@@ -463,7 +468,10 @@ async function collectCandidateFiles(
           path: fullPath,
           platform: filePlatform,
           updatedAt: stat.mtime.toISOString(),
-          sortTime: stat.mtime.getTime()
+          sortTime: stat.mtime.getTime(),
+          targetDay: fullPath.includes(day.stamp) ||
+            fullPath.replace(/\\/g, "/").includes(`/${day.stamp.replace(/-/g, "/")}/`) ||
+            (stat.mtime.getTime() >= day.start && stat.mtime.getTime() < day.targetEnd)
         });
       }
     }
