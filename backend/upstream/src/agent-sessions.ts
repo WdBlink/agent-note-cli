@@ -408,15 +408,19 @@ async function collectCandidateFiles(
   const coverage: AgentEvidenceCoverageEntry[] = [];
   let inspected = 0;
   let truncated = false;
+  const shallow = platform === "copilot";
 
   async function walk(dir: string, depth: number): Promise<void> {
-    if (files.length >= limits.maxFiles || inspected >= limits.maxEntries || depth > limits.maxDepth) {
+    const countEntries = !shallow || depth === 0;
+    if ((!shallow && files.length >= limits.maxFiles) || (countEntries && inspected >= limits.maxEntries) || depth > limits.maxDepth) {
       truncated = true;
       return;
     }
     let entries: string[];
     try {
-      entries = await fs.readdir(dir);
+      // Copilot stores one transcript directly under each session directory. Probe it
+      // without enumerating workspaces; the global date/mtime sort applies the file cap.
+      entries = shallow && depth > 0 ? ["events.jsonl"] : await fs.readdir(dir);
     } catch (error) {
       coverage.push({
         sourceId: `${platform}:${dir}`,
@@ -431,11 +435,11 @@ async function collectCandidateFiles(
     const preferred = (entry: string) => entry.includes(day.stamp) ||
       (platform === "codex" && isCodexDateDirectory(joinPath(dir, entry), day.stamp));
     for (const entry of entries.sort((a, b) => Number(preferred(b)) - Number(preferred(a)) || b.localeCompare(a))) {
-      if (files.length >= limits.maxFiles || inspected >= limits.maxEntries) {
+      if ((!shallow && files.length >= limits.maxFiles) || (countEntries && inspected >= limits.maxEntries)) {
         truncated = true;
         return;
       }
-      inspected += 1;
+      if (countEntries) inspected += 1;
       const fullPath = joinPath(dir, entry);
       let stat: RuntimeFileStat;
       try {
@@ -451,7 +455,7 @@ async function collectCandidateFiles(
         continue;
       }
 
-      if (stat.isDirectory()) {
+      if (stat.isDirectory() && (!shallow || depth === 0)) {
         const shouldDescend =
           depth === 0 ||
           isInTargetDay(stat, day) ||

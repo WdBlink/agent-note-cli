@@ -65,6 +65,42 @@ test("Copilot discovery uses events.jsonl and canonical session.start identity a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test("Copilot discovers shallow history before applying the file cap and still reports entry limits", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "agent-notebook-copilot-history-"));
+  try {
+    const root = path.join(dir, ".copilot/session-state");
+    const date = "2026-09-07";
+    const targetTime = new Date(`${date}T12:00:00`);
+    const laterTime = new Date("2026-09-08T12:00:00");
+    const targetId = "00000000-0000-4000-8000-000000000000";
+    await Promise.all(Array.from({ length: 265 }, async (_, i) => {
+      const id = i === 0 ? targetId : `ffffffff-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      const sessionDir = path.join(root, id);
+      await mkdir(path.join(sessionDir, "workspace"), { recursive: true });
+      const time = i === 0 ? targetTime : laterTime;
+      const content = JSON.stringify({ type: "session.start", timestamp: time.toISOString(), data: { sessionId: id } });
+      // More than 900 unrelated entries must not consume transcript discovery's budget.
+      for (const name of ["workspace.yaml", "session.db", "session.lock", "notes.txt", "workspace/events.jsonl"]) {
+        await writeFile(path.join(sessionDir, name), content);
+      }
+      if (i < 163) {
+        const file = path.join(sessionDir, "events.jsonl");
+        await writeFile(file, content);
+        await utimes(file, time, time);
+      }
+    }));
+    const visited: string[] = [];
+    const fs = { ...fsAdapter, readdir: async (file: string) => { visited.push(file); return readdir(file); } };
+    const options = { date, now: new Date("2026-09-09T12:00:00"), homeDir: dir, providers: ["copilot"] as const, fs };
+    const snapshot = await loadAgentWorkSnapshot(createEmptyData().settings, { ...options, providers: [...options.providers] });
+    assert.deepEqual(snapshot.sessions.map(session => session.id), [targetId]);
+    assert.deepEqual(visited, [root], "session workspaces are never traversed");
+    assert.ok(snapshot.evidenceCoverage?.some(entry => entry.disposition === "truncated"), "the global file cap remains visible");
+    const limited = await loadAgentWorkSnapshot(createEmptyData().settings, { ...options, providers: [...options.providers], maxEntries: 1 });
+    assert.ok(limited.evidenceCoverage?.some(entry => entry.disposition === "truncated"), "root enumeration remains bounded");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("extracts Codex JSONL sessions with resume hints", () => {
   const content = [
     JSON.stringify({
