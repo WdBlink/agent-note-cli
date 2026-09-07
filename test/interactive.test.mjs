@@ -63,7 +63,7 @@ test('upgrades show bundled notes once and preserve source preferences; notes re
   const file = path.join(f.options.dataDir, 'ui-preferences.json');
   await fs.writeFile(file, JSON.stringify({ source: 'claude', lastSeenVersion: '0.3.0', custom: true }));
   await runInteractive(f.options, { terminal: new ScriptedTerminal([
-    ['read', /^本次更新/, null, page => assert.match(page.text, /自动检查更新/)],
+    ['read', /^本次更新/, null, page => assert.ok(page.text.includes(`Agent Note CLI ${version}`))],
     ['menu', /^首页$/, null]
   ]) });
   assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), { source: 'claude', lastSeenVersion: version, custom: true });

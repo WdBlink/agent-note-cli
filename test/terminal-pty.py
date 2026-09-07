@@ -115,7 +115,7 @@ process.stdin.on('end', async () => {{
     app = App(args)
     try:
         app.expect('/    本次更新')
-        app.expect('自动检查更新')
+        app.expect('Agent Note CLI ' + json.loads((repo / 'package.json').read_text())['version'])
         app.back('首页')
         app.send('\r')
         app.expect('生成这一天的简报')

@@ -19,11 +19,11 @@
 
 窗口最小为 24 列 × 12 行；100 列以上的菜单可显示右侧预览。`NO_COLOR=1` 保留文字选中标记并关闭颜色。`TERM=dumb` 或非 TTY 不启动交互界面，请使用普通 `brief` 命令。
 
-### 直达会话（开发测试版）
+### 直达会话（实验性）
 
 工作线和深读标题下展示来源会话。按 `o` 时，单一来源直接定位；多个来源先显示标题、Provider 和可用窗口，选中后 Enter 直达。阅读来源时，Enter 始终打开冻结原文，`o` 切换到原会话。返回 Agent Note 后保留阅读位置。子 Agent 记录直达已识别的所属主会话。
 
-当前支持运行中的 Codex app、Otty，以及能按进程和 TTY 精确定位的 iTerm2、Terminal 和当前 tmux server。使用真实会话 ID、窗格 ID 和进程信息，不按标题或目录猜测。窗口消失、状态不明或权限失败时留在当前页面并说明原因，**不会执行 `resume`、创建会话或发送消息**。已关闭的 Claude CLI、未接入的终端和跨主机窗口暂不能一键直达。该功能尚未进入 v0.5.0 稳定发布，设计与能力边界见[会话直达设计](session-jump.md)。
+当前支持运行中的 Codex app、Otty，以及能按进程和 TTY 精确定位的 iTerm2、Terminal 和当前 tmux server。使用真实会话 ID、窗格 ID 和进程信息，不按标题或目录猜测。窗口消失、状态不明或权限失败时留在当前页面并说明原因，**不会执行 `resume`、创建会话或发送消息**。已关闭的 Claude CLI、未接入的终端和跨主机窗口暂不能一键直达。该功能从 v0.6.0 起提供，设计与能力边界见[会话直达设计](session-jump.md)。
 
 ### 配色和图稿没有出现
 
@@ -54,7 +54,7 @@ env -u NO_COLOR agent-note ui
 
 ## 来源与模型
 
-`--source all|codex|claude` 控制启用的会话来源，也沿用 App 的 provider 分配规则。默认启用两个来源；如果只有其中一个 CLI，请明确选择它。
+`--source all|codex|claude|copilot` 控制启用的会话来源，默认读取三种来源。Copilot CLI 历史来自 `~/.copilot/session-state/*/events.jsonl`；它是输入来源，生成仍使用配置的 Codex / Claude 模型。只想读取一种来源时请显式选择。
 
 首次安装后先运行 `codex --version` 或 `claude --version`，并在对应 CLI 完成登录。Agent Note 不复制登录凭据。已有会话但模型 CLI 未安装时，生成会失败；已有 brief 仍可用 `--read-only` 阅读。
 
@@ -91,7 +91,7 @@ agent-note brief --root ~/exports/codex --root ~/exports/claude
 agent-note brief --project ~/Code/my-project --data-dir ~/agent-note-data
 ```
 
-`--root` 可重复。原后端依赖目录名中的 `codex` 或 `claude` 识别来源；无该标识的目录会被拒绝。命令行不根据 `CODEX_HOME`、`CLAUDE_CONFIG_DIR` 自动改写 App 默认扫描目录，请用 `--root` 或 settings 明确设置。
+`--root` 可重复。原后端依赖目录名中的 `codex`、`claude` 或 `copilot` 识别来源；无该标识的目录会被拒绝。Copilot 自定义根目录应指向包含各会话子目录的 `session-state`。命令行不根据 `CODEX_HOME`、`CLAUDE_CONFIG_DIR` 自动改写 App 默认扫描目录，请用 `--root` 或 settings 明确设置。
 
 日期依据所选时区，默认系统时区。项目筛选保留匹配主会话的完整 Agent 家族，即使子 Agent 在另一个目录执行。不同来源、项目和时区使用独立数据范围。工作线编号属于当前范围当前版本；脚本可使用 JSON 中的 `worklineId`。
 
