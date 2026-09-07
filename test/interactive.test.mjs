@@ -85,6 +85,25 @@ test('interactive app generates, opens a pinned workline, reads source, exports 
   assert.ok(terminal.closed);
 });
 
+test('the app keeps the chosen compiler while the source menu changes what is read', async t => {
+  const f = await fixture(t);
+  const requests = [];
+  const terminal = new ScriptedTerminal([
+    ['menu', /^首页$/, 'providers'],
+    ['menu', /^会话来源$/, 'cursor', menu => assert.match(menu.description, /Cursor Agent CLI/)],
+    ['menu', /^首页$/, 'brief'],
+    ['menu', /^工作脉络$/, null],
+    ['menu', /^首页$/, null]
+  ]);
+  await runInteractive({ ...f.options, compiler: 'claude' }, { terminal, service: options => {
+    requests.push(options);
+    return brief(options, { runner: structuredRunner() });
+  } });
+  assert.ok(requests.length > 0);
+  assert.ok(requests.every(request => request.compiler === 'claude'), 'the compiler survives every service call');
+  assert.equal(requests.at(-1).source, 'cursor', 'the source menu still switches what is read');
+});
+
 test('project/date changes invalidate cached view; read-only browsing never offers generation', async t => {
   const f = await fixture(t);
   const requested = [];

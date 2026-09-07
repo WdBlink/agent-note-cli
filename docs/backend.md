@@ -16,7 +16,25 @@ CLI 没有自己的会话解析器、摘要 prompt、工作线算法或降级版
 | 读取已有结果、判断证据变化 | `src/structured-today-review-state.ts` |
 | 模型分配和进程调用 | `structured-today-cli-caller.ts` + `cli-runner.ts` |
 
-`backend/upstream/` 是上述后端及依赖的**未改写源码快照**，带原有测试与编辑规则。`backend/provenance.json` 记录来源提交和每个文件的 SHA-256；来源为该提交上的工作树，哈希也覆盖当时尚未提交的编辑规则修订。构建时逐文件校验，禁止在 CLI 中维护第二套后端实现。App 当前仍是后端源码来源，通过同步脚本更新快照；这不是已经完成双仓库包依赖迁移的 monorepo。本分支在该快照上增加了 Cursor 会话来源与 Cursor Agent CLI 编译路径；从 App 重新同步前需要把同等改动带回 Agent Notebook，否则会被覆盖。
+`backend/upstream/` 是上述后端及依赖的**未改写源码快照**，带原有测试与编辑规则。`backend/provenance.json` 记录来源提交和每个文件的 SHA-256；来源为该提交上的工作树，哈希也覆盖当时尚未提交的编辑规则修订。构建时逐文件校验，禁止在 CLI 中维护第二套后端实现。App 当前仍是后端源码来源，通过同步脚本更新快照；这不是已经完成双仓库包依赖迁移的 monorepo。本分支在该快照上增加了 Cursor 会话来源与 Cursor Agent CLI 编译路径；从 App 重新同步前需要把同等改动带回 Agent Notebook，否则会被覆盖。改动清单见下节。
+
+### 需要带回 Agent Notebook 的改动
+
+快照来自 App 的 `e259f166`。生成可直接在 App 工作树上 `git apply` 的补丁：
+
+```sh
+git diff 6ae8403 -- backend/upstream | sed 's#\([ab]\)/backend/upstream/#\1/#g' > /tmp/cursor-support.patch
+```
+
+其中三类改动**与 Cursor 无关**，是快照里既有的缺陷，App 同样中招，建议单独评审：
+
+| 位置 | 问题 |
+| --- | --- |
+| `src/agent-summary.ts`、`src/workline-review.ts`、`app/desktop/structured-today-cli-caller.ts` | 传给 Claude Code 的 `--safe-mode` 已被该 CLI 移除，任何较新版本上 Claude 编译都以非零码退出 |
+| `app/desktop/structured-today-runtime.ts` | 会话 ID 一致性检查发生在 digest 缓存写入之后，一次坏响应会被永久固化，无法重试 |
+| `src/workline-review.ts`、`src/traceink-review-assets.ts`、`app/desktop/structured-today-citations.tsx` | 读回与展示侧只认 codex/claude，写入侧却已能产生 cursor |
+
+其余是 Cursor 支持本身：会话发现与解析、编译器分派、以及三处传输层补偿（内联 schema、还原唯一值 enum、读取第一个完整 JSON 值）。补偿的依据是对 Cursor Agent CLI `2026.09.02` 的实测偏差，注释里记录了各自的观测现象。
 
 ```sh
 # 维护者：从 App 工作树同步相同后端，随后重新验证
