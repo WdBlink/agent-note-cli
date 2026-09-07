@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/WdBlink/agent-notebook",
-  "commit": "5f5dc5bf2657eb26919196041c45c6ca98db1e53",
+  "commit": "ea2020c9a068a24ca18839ed3de5dc94b2f432df",
   "source": "working-tree",
   "files": {
     "LICENSE": "24f266210ee5aae6ef6b6f5f0156139347a0c850f4e7e5f546ef3004e5149e42",
@@ -21,7 +21,7 @@
     "app/desktop/transcript-source-reader.ts": "51786085745e42cb1952fbd903284159f0613e59300e438d02f5911b47c0598b",
     "skills/traceink/SKILL.md": "0596391934a10552937ab4b16c3a22911a8915d50670f5075c2e52eb3db002ca",
     "skills/traceink/references/editorial-contract.md": "9b39a78a37c62677b487cb29931c158fda4183a0e7b7efeb3b1eab231caa5279",
-    "src/agent-sessions.ts": "d55c31e62351b27d6899f9892bd79a13d6a4d01fdcca8b46875abe5c7ebd9b01",
+    "src/agent-sessions.ts": "992d10ce81f710f48d48c4a4c0937d19beeb45d832406ff0549bff48d1f435c0",
     "src/agent-summary.ts": "d19387420bad85029c0d2e246e19205103a4fb31e735390931f59bf7fef23706",
     "src/cli-output-collector.ts": "f126d747fa5a36cd2f74b9987e23e660f4f9f20bb53e6dd057a79415b03934f4",
     "src/constants.ts": "36f2ad16701dcd62084880382863605559cea0acf334aec78625423bc504fd60",
@@ -49,7 +49,7 @@
     "src/whiteboard-model.ts": "008e7ca97f486040232740018b0d4968b287c7e2c20ef8f321633aa73f5c54a8",
     "src/workline-review.ts": "223dc989a084da02d13e0e14983dd2462dad325e0dc7684b3ed59c9dc01da43e",
     "src/workline-transport-recovery.ts": "bdcd4903ad6bc86699114dfd002df8ca74639388e512f69962379b2836f93445",
-    "tests/agent-sessions.test.ts": "b2b36dede61f38a97a41084f3e85df214935825f8672c8285e4936ed96294481",
+    "tests/agent-sessions.test.ts": "6283e8f67d4258080fafd6329d37d1bd4591265255fbeb9f2bfbdf02f3000aee",
     "tests/structured-today-integration.test.ts": "8e1912ff26e1be99a1abe5e0e65de885501ccf4d4c491aa35610fef525cd01dd",
     "tests/structured-today-provider-schema.test.ts": "d8d566d1c63b85d238d899a265d6328fa7d3be8a3755b27e23fa2d865211880f",
     "tests/structured-today-workflow.test.ts": "cf76f9258a15b1d0575df2d021773f1c3dd572db7a18d3b5e22d44e157b3b907",
