@@ -59,6 +59,9 @@ test('Otty resolves exact provider and ID; focus rechecks the current pane and n
   assert.deepEqual(launches[0].slice(0, 2), ['/Applications/Otty.app/Contents/MacOS/otty-cli', ['pane', 'focus', '--pane', 'p_live_1']]);
   const [wrongProvider] = await r.inspect([claude]);
   assert.deepEqual(wrongProvider.targets, []);
+  const duplicate = runtime({ processes: [otty], panes: [pane, { ...pane, id: 'p_second' }] });
+  const labels = (await duplicate.inspect([session]))[0].targets.map(target => target.label);
+  assert.equal(new Set(labels).size, 2, 'two windows for the same session are distinguishable');
   const gone = runtime({ processes: [otty], panes: [{ ...pane, agent_session_id: otherId }] });
   await assert.rejects(jumpToSession(session, state.targets[0].id, { inspect: gone.inspect, run: async () => assert.fail('must not focus reused pane') }), /状态已变化/);
 });
@@ -114,7 +117,7 @@ test('tmux focuses the exact pane in the current server and command failure neve
   const [state] = await r.inspect([session]);
   const calls = [];
   await jumpToSession(session, state.targets[0].id, { inspect: r.inspect, run: async (file, args) => calls.push([file, args]) });
-  assert.deepEqual(calls, [['tmux', ['switch-client', '-t', '$2']], ['tmux', ['select-window', '-t', '@7']], ['tmux', ['select-pane', '-t', '%4']]]);
+  assert.deepEqual(calls, [['tmux', ['switch-client', '-t', '%4']]], 'one command selects the exact session, window and pane');
   let attempts = 0;
   await assert.rejects(jumpToSession(session, state.targets[0].id, { inspect: r.inspect, run: async () => { attempts++; throw new Error('permission denied'); } }), /permission denied/);
   assert.equal(attempts, 1);

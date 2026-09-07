@@ -331,6 +331,29 @@ test('menu jump shortcut acts on the selected filtered item and does not steal s
   } finally { f.terminal.close(); }
 });
 
+test('narrow jump pages keep action and return keys visible and explain actions in help', async t => {
+  const f = tty(t);
+  f.output.columns = 24;
+  f.terminal.start();
+  try {
+    const selecting = f.terminal.menu({ title: '来源', items: [{ id: 'one', label: 'one' }], actions: { o: '直达' } });
+    assert.ok(width(f.terminal.renderScreen().footer) <= f.terminal.contentWidth);
+    assert.match(f.terminal.renderScreen().footer, /o.*Esc/);
+    f.input.write('o');
+    assert.equal((await selecting).action, 'o');
+    const reading = f.terminal.read({ title: '工作线', text: '正文', actions: { o: '直达会话', d: '深读', s: '来源', e: '导出' } });
+    assert.ok(width(f.terminal.renderScreen().footer) <= f.terminal.contentWidth);
+    assert.match(f.terminal.renderScreen().footer, /o\/d\/s\/e.*Esc/);
+    f.input.write('?');
+    await tick();
+    assert.ok(f.text().includes('o：直达会话'));
+    f.input.emit('keypress', undefined, { name: 'escape' });
+    await tick();
+    f.input.emit('keypress', undefined, { name: 'escape' });
+    await reading;
+  } finally { f.terminal.close(); }
+});
+
 test('background status redraw preserves menu selection and reader position', async t => {
   const f = tty(t);
   f.terminal.start();
@@ -437,6 +460,7 @@ test('warm theme keeps focus out of the preview, formats reading and animates on
   const f = tty(t);
   f.terminal.color = true;
   f.terminal.start();
+  let finish, busy;
   try {
     const menu = f.terminal.menu({ title: '首页', items: [{ id: 'read', label: '工作脉络', preview: '证据预览' }] });
     const screen = f.text();
@@ -455,15 +479,16 @@ test('warm theme keeps focus out of the preview, formats reading and animates on
     f.input.emit('keypress', undefined, { name: 'escape' });
     await reading;
 
-    let advance, finish;
-    const busy = f.terminal.busy('准备深读', ({ onProgress }) => {
+    t.mock.timers.enable({ apis: ['Date', 'setInterval', 'setTimeout'] });
+    let advance;
+    busy = f.terminal.busy('准备深读', ({ onProgress }) => {
       advance = onProgress;
       onProgress({ stage: 'dossier-analysis', status: 'running' });
       return new Promise(resolve => { finish = resolve; });
     });
-    await new Promise(resolve => setTimeout(resolve, 180));
+    t.mock.timers.tick(160);
     const offset = f.text().length;
-    await new Promise(resolve => setTimeout(resolve, 180));
+    t.mock.timers.tick(160);
     const animation = f.text().slice(offset);
     assert.ok(animation.includes('▰▰▰▰'));
     assert.ok(!animation.includes('\x1b[2J'), 'animation must not clear the screen');
@@ -474,9 +499,9 @@ test('warm theme keeps focus out of the preview, formats reading and animates on
     finish(true);
     assert.equal(await busy, true);
     const stopped = f.text().length;
-    await new Promise(resolve => setTimeout(resolve, 200));
+    t.mock.timers.tick(200);
     assert.equal(f.text().length, stopped, 'animation timer is cleaned up');
-  } finally { f.terminal.close(); }
+  } finally { finish?.(true); await busy; f.terminal.close(); }
 });
 
 test('fast work does not flash a progress screen or leave a delayed redraw', async t => {

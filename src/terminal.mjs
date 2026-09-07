@@ -307,7 +307,7 @@ export class Terminal {
       }
       return { title, body,
         note: searching || query ? `搜索 / ${query}▏   ${list.length} 项` : (typeof note === 'function' ? note() : note) || (list.length ? `${selected + 1} / ${list.length}` : ''),
-        footer: searching ? '输入筛选 · Enter 完成 · Esc 清除' : `↑↓  Enter${enterLabel}${Object.entries(actions).map(([key, action]) => `  ${key}${action}`).join('')}${searchable && this.columns >= 60 ? '  /搜索' : ''}  Esc返回  q退出` };
+        footer: searching ? '输入筛选 · Enter 完成 · Esc 清除' : this.columns < 50 ? `↑↓ Enter ${Object.keys(actions).join('/')} Esc q` : `↑↓  Enter${enterLabel}${Object.entries(actions).map(([key, action]) => `  ${key}${action}`).join('')}${searchable && this.columns >= 60 ? '  /搜索' : ''}  Esc返回  q退出` };
     };
     this.show(render);
     while (!this.quit) {
@@ -350,7 +350,7 @@ export class Terminal {
       scroll = Math.max(0, Math.min(scroll, lines.length - this.capacity));
       position.scroll = scroll;
       return { title, body: lines.slice(scroll), note: (typeof note === 'function' ? note() : note) || `${scroll + 1}–${Math.min(lines.length, scroll + this.capacity)} / ${lines.length} 行`,
-        footer: this.columns < 100 ? `↑↓ ${Object.entries(actions).map(([key, action]) => `${key}${action.slice(0, 2)}`).join(' ')} ?键位 Esc返回` : `↑↓ 滚动 · ? 键位${Object.entries(actions).map(([key, action]) => ` · ${key} ${action}`).join('')} · Esc 返回` };
+        footer: this.columns < 50 ? `↑↓ ${Object.keys(actions).join('/')} ? Esc` : this.columns < 100 ? `↑↓ ${Object.entries(actions).map(([key, action]) => `${key}${action.slice(0, 2)}`).join(' ')} ?键位 Esc返回` : `↑↓ 滚动 · ? 键位${Object.entries(actions).map(([key, action]) => ` · ${key} ${action}`).join('')} · Esc 返回` };
     };
     this.show(render);
     while (!this.quit) {
@@ -359,7 +359,7 @@ export class Terminal {
       if (key.text === 'q') { this.stop(); return null; }
       if (!key.ctrl && !key.meta && actions[key.text]) return key.text;
       if (key.text === '?') {
-        await this.read({ title: '阅读键位', text: '↑↓ / j k / Ctrl-N P：逐行滚动\nCtrl-F / Ctrl-B：下翻 / 上翻一页\nCtrl-D / Ctrl-U：下翻 / 上翻半页\nCtrl-V / Alt-V：下翻 / 上翻一页（Emacs）\nPageDown / PageUp：下翻 / 上翻一页\ng / G / Home / End：首行 / 末页\nSpace：下翻一页\nEsc：返回' });
+        await this.read({ title: '阅读键位', text: [...Object.entries(actions).map(([key, action]) => `${key}：${action}`), '↑↓ / j k / Ctrl-N P：逐行滚动\nCtrl-F / Ctrl-B：下翻 / 上翻一页\nCtrl-D / Ctrl-U：下翻 / 上翻半页\nCtrl-V / Alt-V：下翻 / 上翻一页（Emacs）\nPageDown / PageUp：下翻 / 上翻一页\ng / G / Home / End：首行 / 末页\nSpace：下翻一页\nEsc：返回'].join('\n') });
         this.show(render);
         continue;
       }

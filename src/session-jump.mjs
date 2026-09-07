@@ -115,7 +115,7 @@ export async function inspectSessionTargets(sessions, { run = command, readFile 
     for (const pane of panes) {
       const paneProvider = ({ Codex: 'codex', 'Claude Code': 'claude' })[pane.agent];
       if (paneProvider === s.platform && pane.agent_session_id === s.id && /^p_[a-zA-Z0-9_]+$/.test(pane.id)) {
-        state.targets.push({ id: `otty:${pane.id}`, kind: 'otty', pane: pane.id, executable: ottyCli, label: 'Otty · 已打开' });
+        state.targets.push({ id: `otty:${pane.id}`, kind: 'otty', pane: pane.id, executable: ottyCli, label: `Otty · ${pane.id}` });
       }
     }
     for (const process of matches) {
@@ -176,9 +176,7 @@ export async function jumpToSession(session, targetId, { inspect = inspectSessio
   if (target.kind === 'otty') await run(target.executable, ['pane', 'focus', '--pane', target.pane], options);
   else if (target.kind === 'codex-app') await run('/usr/bin/open', ['-b', 'com.openai.codex', `codex://threads/${session.id}`], options);
   else if (target.kind === 'tmux') {
-    await run('tmux', ['switch-client', '-t', target.session], options);
-    await run('tmux', ['select-window', '-t', target.window], options);
-    await run('tmux', ['select-pane', '-t', target.pane], options);
+    await run('tmux', ['switch-client', '-t', target.pane], options);
   } else if (['iterm', 'terminal'].includes(target.kind) && /^\/dev\/tty[a-zA-Z0-9/]+$/.test(target.tty)) {
     await run('/usr/bin/osascript', ['-e', terminalFocusScript(target.kind), target.tty], options);
   } else throw new Error('当前会话窗口尚不支持直达。');
