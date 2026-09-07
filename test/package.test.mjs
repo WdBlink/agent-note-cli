@@ -11,6 +11,9 @@ test('release installs offline with bundled dependencies and runs its backend ou
   const packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', dir], { encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }))[0];
   assert.ok(packed.bundled.includes('@langchain/langgraph'));
   assert.ok(!packed.bundled.includes('esbuild'));
+  const pkg = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.ok(packed.files.some(item => item.path === `docs/releases/v${pkg.version}.md`));
+  assert.ok(packed.files.some(item => item.path === 'src/updates.mjs'));
   for (const dependency of ['react', 'lucide-react']) assert.ok(!packed.bundled.includes(dependency));
   for (const file of ['src/terminal.mjs', 'src/interactive.mjs', 'src/assets/notebook.png', 'src/assets/notebook-strap-lift.png', 'src/assets/notebook-strap-free.png', 'src/assets/notebook-ajar.png', 'src/assets/notebook-open.png']) assert.ok(packed.files.some(item => item.path === file));
   execFileSync('npm', ['install', '--prefix', path.join(dir, 'app'), '--offline', '--cache', path.join(dir, 'empty-cache'), '--ignore-scripts', '--no-audit', '--no-fund', path.join(dir, packed.filename)], { stdio: 'pipe' });

@@ -143,6 +143,10 @@ Copilot 会话自动从 `~/.copilot/session-state/*/events.jsonl` 读取，提�
 
 ## 更新与卸载
 
+TUI 启动时会在后台检查 GitHub 最新稳定版，首页底部提示结果；「版本与更新」可查看当前版本、更新说明与升级方法。检查最多等待 5 秒，失败不影响使用，也不会发送会话或项目内容。设置 `AGENT_NOTE_NO_UPDATE_CHECK=1` 可关闭联网检查；`brief` 脚本接口不检查更新。
+
+升级后的首次启动会自动展示一次本次更新说明，离线也可阅读。已读版本保存在当前数据目录的 `ui-preferences.json` 中；首次安装、删除设置或切换数据目录后也会展示一次。应用不会自行安装更新。
+
 ```sh
 brew update
 brew upgrade wdblink/tap/agent-note-cli

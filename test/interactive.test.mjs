@@ -7,14 +7,19 @@ import { PassThrough, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { setImmediate as tick } from 'node:timers/promises';
 import { Terminal, frame, width, fit, wrap } from '../src/terminal.mjs';
-import { runInteractive } from '../src/interactive.mjs';
+import { runInteractive as runApp } from '../src/interactive.mjs';
+import { version } from '../src/updates.mjs';
 import { brief, readSource } from '../src/service.mjs';
 import { structuredRunner } from './model-fixture.mjs';
 import { desktopCliRunner } from '../dist/backend.mjs';
 
+const runInteractive = (options, dependencies) => runApp(options, { updateChecker: async () => null, ...dependencies });
+
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-note-ui-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await fs.mkdir(path.join(dir, 'data'));
+  await fs.writeFile(path.join(dir, 'data/ui-preferences.json'), JSON.stringify({ lastSeenVersion: version }));
   const root = path.join(dir, 'codex');
   await fs.mkdir(root);
   const file = path.join(root, 'session.jsonl');
@@ -51,6 +56,67 @@ class ScriptedTerminal {
   async read(input) { return this.next('read', input); }
   async prompt(input) { const value = this.next('prompt', input); if (value !== null) await input.validate(value); return value; }
 }
+
+test('upgrades show bundled notes once and preserve source preferences; notes remain available from home', async t => {
+  const f = await fixture(t);
+  const file = path.join(f.options.dataDir, 'ui-preferences.json');
+  await fs.writeFile(file, JSON.stringify({ source: 'claude', lastSeenVersion: '0.3.0', custom: true }));
+  await runInteractive(f.options, { terminal: new ScriptedTerminal([
+    ['read', /^本次更新/, null, page => assert.match(page.text, /自动检查更新/)],
+    ['menu', /^首页$/, null]
+  ]) });
+  assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), { source: 'claude', lastSeenVersion: version, custom: true });
+  await runInteractive(f.options, { terminal: new ScriptedTerminal([
+    ['menu', /^首页$/, 'updates'],
+    ['read', /^版本与更新/, null, page => assert.match(page.text, /brew upgrade/)],
+    ['menu', /^首页$/, null]
+  ]) });
+  await fs.rm(file);
+  await runInteractive(f.options, { terminal: new ScriptedTerminal([
+    ['read', /^本次更新/, null], ['menu', /^首页$/, null]
+  ]) });
+  assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).lastSeenVersion, version);
+});
+
+test('update checks do not block home, refresh status without navigation and abort on exit', async t => {
+  const f = await fixture(t);
+  let resolveCheck, signal, redraws = 0;
+  const terminal = new ScriptedTerminal([]);
+  terminal.draw = () => { redraws++; };
+  terminal.menu = async page => {
+    assert.match(page.title, /^首页$/);
+    assert.match(page.note(), /后台检查/);
+    resolveCheck('0.10.0');
+    await tick();
+    assert.match(page.note(), /发现新版本 v0.10.0/);
+    assert.equal(redraws, 1);
+    return null;
+  };
+  await runInteractive(f.options, { terminal, updateChecker: options => {
+    signal = options.signal;
+    return new Promise(resolve => { resolveCheck = resolve; });
+  } });
+  assert.ok(signal.aborted);
+  await runInteractive(f.options, { terminal: new ScriptedTerminal([['menu', /^首页$/, null]]),
+    updateChecker: ({ signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })) });
+});
+
+test('offline update failure leaves home usable', async t => {
+  const f = await fixture(t);
+  const terminal = new ScriptedTerminal([]);
+  terminal.menu = async page => { await tick(); assert.match(page.note(), /暂时无法检查更新/); return null; };
+  await runInteractive(f.options, { terminal, updateChecker: async () => { throw new Error('offline'); } });
+});
+
+test('automatic release notes do not overwrite unreadable preferences', async t => {
+  const f = await fixture(t);
+  const file = path.join(f.options.dataDir, 'ui-preferences.json');
+  await fs.writeFile(file, '{broken');
+  await runInteractive(f.options, { terminal: new ScriptedTerminal([
+    ['read', /^设置读取失败$/, null], ['read', /^本次更新/, null], ['menu', /^首页$/, null]
+  ]) });
+  assert.equal(await fs.readFile(file, 'utf8'), '{broken');
+});
 
 test('interactive app generates, opens a pinned workline, reads source, exports and returns without leaving the app', async t => {
   const f = await fixture(t);
@@ -186,6 +252,33 @@ test('terminal handles buffered arrows, Unicode search, resize, paging and resto
   assert.equal(f.input.isRaw, false);
   assert.equal(f.signals.listenerCount('SIGINT'), 0);
   assert.match(f.text(), /\x1b\[\?1049l$/);
+});
+
+test('background status redraw preserves menu selection and reader position', async t => {
+  const f = tty(t);
+  f.terminal.start();
+  let status = '正在检查';
+  try {
+    const menu = f.terminal.menu({ title: '首页', note: () => status, items: [{ id: 'one', label: 'One' }, { id: 'two', label: 'Two' }] });
+    f.input.write('j');
+    await tick();
+    status = '发现新版本';
+    f.terminal.draw();
+    assert.match(f.text(), /发现新版本/);
+    f.input.write('\r');
+    assert.equal((await menu).id, 'two');
+    const position = {};
+    const reading = f.terminal.read({ title: '版本与更新', text: '更新内容\n'.repeat(100), note: () => status, position });
+    f.input.write(' ');
+    await tick();
+    const scroll = position.scroll;
+    status = '暂时无法检查更新';
+    f.terminal.draw();
+    assert.equal(position.scroll, scroll);
+    assert.match(f.text(), /暂时无法检查更新/);
+    f.input.emit('keypress', undefined, { name: 'escape' });
+    await reading;
+  } finally { f.terminal.close(); }
 });
 
 test('Vim and Emacs navigation scrolls menus/readers without firing plain-letter actions', async t => {

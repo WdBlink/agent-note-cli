@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { brief, readSource, today, validateDate } from './service.mjs';
 import { render } from './presentation.mjs';
 import { Terminal } from './terminal.mjs';
+import { version, checkForUpdate, readReleaseNotes, upgradeInstructions } from './updates.mjs';
 
 const sourceNames = { all: 'Codex + Claude + Copilot', codex: 'Codex', claude: 'Claude Code', copilot: 'GitHub Copilot' };
 const modeNames = { raw: '尚未生成', compiled: '已保存', stale: '来源有变化' };
@@ -13,7 +14,7 @@ const ref = index => index && ({ artifactId: index.artifactId, revision: index.r
 const shiftDate = (date, days) => { const d = new Date(`${date}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); };
 const option = (id, label, hint, preview) => ({ id, label, hint, preview });
 
-export async function runInteractive(initialOptions = {}, { terminal = new Terminal(), service = brief, sourceReader = readSource } = {}) {
+export async function runInteractive(initialOptions = {}, { terminal = new Terminal(), service = brief, sourceReader = readSource, updateChecker = checkForUpdate } = {}) {
   const options = { ...initialOptions, date: initialOptions.date ?? today(), workline: undefined, refresh: false };
   const preferenceFile = path.join(options.dataDir ?? path.join(os.homedir(), '.local/share/agent-note'), 'ui-preferences.json');
   let preferences = {}, preferenceError;
@@ -32,8 +33,8 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
     terminal.context = `${options.date}  ·  ${sourceNames[options.source]}  ·  ${options.project ? path.basename(options.project) : '所有项目'}${options.readOnly ? '  ·  只读' : ''}`;
   };
   const invalidate = () => { view = undefined; snapshot = undefined; updateContext(); };
-  const persistSource = async () => {
-    const next = { ...preferences, source: options.source };
+  const persistPreferences = async patch => {
+    const next = { ...preferences, ...patch };
     await fs.mkdir(path.dirname(preferenceFile), { recursive: true, mode: 0o700 });
     const temporary = `${preferenceFile}.${randomUUID()}.tmp`;
     try {
@@ -234,36 +235,58 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
       options.source = choice.id;
       if (choice.id === 'all') options.settings = { ...options.settings, enabledSessionProviders: ['codex', 'claude', 'copilot'] };
       invalidate();
-      await perform('保存来源偏好', async () => { await persistSource(); return true; });
+      await perform('保存来源偏好', async () => { await persistPreferences({ source: options.source }); return true; });
     }
   }
 
   const help = '在终端里，读懂和 Agent 一起推进的工作。\n\n基本操作\n↑↓、j / k 或 Ctrl-N/P 移动，Enter 打开，Esc 返回，q 或 Ctrl-C 退出。列表按 / 搜索，数字 1–9 可直接打开对应项。\n\n长文阅读\n↑↓、j / k 或 Ctrl-N/P 逐行滚动。Ctrl-F/B 整页翻动，Ctrl-D/U 半页翻动；Emacs 可用 Ctrl-V / Alt-V。PageDown/Up 同样可用，Space 保留向下翻页。g / G 或 Home / End 跳转首尾。工作线中 d 深读，s 查看来源，e 导出。\n\n模型调用\n浏览和切换范围只读取会话与已保存结果。只有选择生成简报、重新整理或首次深读才调用模型并使用额度。进度页按 Esc 取消；已保存的结果仍保留。\n\n来源与版本\n来源按冻结范围校验后打开。工作线选择绑定到看到的版本；列表变化时会提示重新选择。\n\n脚本接口\nagent-note brief --read-only --format json\nagent-note brief --date YYYY-MM-DD --source codex\nagent-note ui --source claude\n\n数据\n来源偏好保存在 UI 设置中。日期与项目只影响本次浏览。Provider 的登录和模型默认值由宿主机配置管理。';
 
+  const updateController = new AbortController();
+  let updateStatus = process.env.AGENT_NOTE_NO_UPDATE_CHECK === '1' ? '自动检查已关闭' : '正在后台检查更新…';
+  let releaseNotes;
+  const showReleaseNotes = async title => {
+    try { releaseNotes ??= await readReleaseNotes(); }
+    catch { await terminal.read({ title: '更新说明暂不可用', text: upgradeInstructions }); return false; }
+    await terminal.read({ title, text: `${releaseNotes}\n\n## 如何更新\n\n${upgradeInstructions}`, markdown: true, note: () => updateStatus });
+    return true;
+  };
   terminal.start();
   try {
+    if (process.env.AGENT_NOTE_NO_UPDATE_CHECK !== '1') {
+      void Promise.resolve().then(() => updateChecker({ signal: updateController.signal })).then(latest => {
+        updateStatus = latest ? `发现新版本 v${latest} · 打开「版本与更新」查看升级方法` : `v${version} · 当前已是最新版本`;
+      }, () => { updateStatus = '暂时无法检查更新 · 下次启动时重试'; }).then(() => {
+        if (!updateController.signal.aborted) terminal.draw?.();
+      });
+    }
     updateContext();
     await terminal.transition();
     if (preferenceError) await terminal.read({ title: '设置读取失败', text: `${preferenceFile}\n\n${preferenceError.message}\n\n本次使用默认来源；可在首页重新选择并保存来源。` });
+    if (!terminal.quit && preferences.lastSeenVersion !== version && await showReleaseNotes(`本次更新 / v${version}`) && !preferenceError) {
+      try { await persistPreferences({ lastSeenVersion: version }); }
+      catch (error) { await terminal.read({ title: '更新阅读状态未保存', text: `${error.message}\n\n下次启动可能再次显示本次更新说明。` }); }
+    }
     let homeSelection = 0;
     while (!terminal.quit) {
-      const choice = await terminal.menu({ title: '首页', initial: homeSelection, description: '今天，和 Agent 一起推进了什么？', note: '先阅读，再决定是否整理。', items: [
+      const choice = await terminal.menu({ title: '首页', initial: homeSelection, description: '今天，和 Agent 一起推进了什么？', note: () => updateStatus, items: [
         option('brief', '工作脉络', view?.index ? `${view.index.worklines.length} 条工作线 · ${modeNames[view.mode]}` : '阅读简报，按工作线继续深读', 'WORK / 工作脉络\n\n从会话里找回推进的事情、当前停点和你的参与。\n\n已有简报直接阅读，新的整理由你发起。'),
         option('dates', '回看日期', options.date, 'HISTORY / 回看\n\n选择今天、最近几天或任意日期。\n\n每一天都保留自己的工作脉络。'),
         option('projects', '选择项目', options.project ?? '所有项目', 'SCOPE / 范围\n\n只关注一个项目，或查看一天里跨项目的工作。'),
         option('providers', '会话来源', sourceNames[options.source], 'SOURCES / 来源\n\n选择已安装并登录的 Codex、Claude Code，或同时使用两者。'),
         option('sources', '浏览会话原文', '查看来源、冻结证据和覆盖信息', 'EVIDENCE / 证据\n\n不生成摘要也能阅读已发现的对话。\n\n已整理的引用按冻结范围校验。'),
-        option('help', '使用帮助', '按键、模型调用与数据位置', 'GUIDE / 使用帮助\n\n随时按 Esc 返回。\n\n所有操作都在当前终端内完成。')
+        option('help', '使用帮助', '按键、模型调用与数据位置', 'GUIDE / 使用帮助\n\n随时按 Esc 返回。\n\n所有操作都在当前终端内完成。'),
+        option('updates', '版本与更新', `当前 v${version} · 更新说明与升级方法`, upgradeInstructions)
       ] });
       if (!choice) break;
-      homeSelection = ['brief', 'dates', 'projects', 'providers', 'sources', 'help'].indexOf(choice.id);
+      homeSelection = ['brief', 'dates', 'projects', 'providers', 'sources', 'help', 'updates'].indexOf(choice.id);
       if (choice.id === 'brief') await browse();
       if (choice.id === 'dates') await dates();
       if (choice.id === 'projects') await projects();
       if (choice.id === 'providers') await providers();
       if (choice.id === 'sources') await sources();
       if (choice.id === 'help') await terminal.read({ title: '使用帮助', text: help });
+      if (choice.id === 'updates') await showReleaseNotes(`版本与更新 / v${version}`);
     }
     await terminal.transition(true);
-  } finally { terminal.close(); }
+  } finally { updateController.abort(); terminal.close(); }
 }

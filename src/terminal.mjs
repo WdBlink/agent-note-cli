@@ -287,7 +287,7 @@ export class Terminal {
           row(' │  ', 'rule'), ...(preview[i]?.parts ?? [preview[i] ?? row('')])) : row(padded, line.tone));
       }
       return { title, body,
-        note: searching || query ? `搜索 / ${query}▏   ${list.length} 项` : note || (list.length ? `${selected + 1} / ${list.length}` : ''),
+        note: searching || query ? `搜索 / ${query}▏   ${list.length} 项` : (typeof note === 'function' ? note() : note) || (list.length ? `${selected + 1} / ${list.length}` : ''),
         footer: searching ? '输入筛选 · Enter 完成 · Esc 清除' : this.columns < 60 ? '↑↓  Enter  Esc返回  q退出' : `↑↓/jk/C-n,p 移动  Enter打开${searchable ? '  /搜索' : ''}  Esc返回  q退出` };
     };
     this.show(render);
@@ -329,7 +329,7 @@ export class Terminal {
       }
       scroll = Math.max(0, Math.min(scroll, lines.length - this.capacity));
       position.scroll = scroll;
-      return { title, body: lines.slice(scroll), note: note || `${scroll + 1}–${Math.min(lines.length, scroll + this.capacity)} / ${lines.length} 行`,
+      return { title, body: lines.slice(scroll), note: (typeof note === 'function' ? note() : note) || `${scroll + 1}–${Math.min(lines.length, scroll + this.capacity)} / ${lines.length} 行`,
         footer: this.columns < 70 ? `↑↓ ${Object.entries(actions).map(([key, action]) => `${key}${action.slice(0, 2)}`).join(' ')} Esc返回` : `Ctrl-F/B 翻页 · Ctrl-D/U 半页 · ? 键位${Object.entries(actions).map(([key, action]) => ` · ${key} ${action}`).join('')} · Esc 返回` };
     };
     this.show(render);

@@ -24,7 +24,7 @@ class App:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 28, 112, 0, 0))
         self.child = subprocess.Popen([shutil.which('node'), str(repo / 'src/cli.mjs'), 'ui', *args],
                                       stdin=slave, stdout=slave, stderr=slave, cwd=repo,
-                                      env={**os.environ, 'TERM': 'xterm-256color', 'NO_COLOR': '1'}, start_new_session=True)
+                                      env={**os.environ, 'TERM': 'xterm-256color', 'NO_COLOR': '1', 'AGENT_NOTE_NO_UPDATE_CHECK': '1'}, start_new_session=True)
         self.slave = slave
         self.buffer = b''
         self.cursor = 0
@@ -114,7 +114,9 @@ process.stdin.on('end', async () => {{
             '--data-dir', str(root / 'data'), '--settings', str(settings)]
     app = App(args)
     try:
-        app.expect('/    首页')
+        app.expect('/    本次更新')
+        app.expect('自动检查更新')
+        app.back('首页')
         app.send('\r')
         app.expect('生成这一天的简报')
         app.send('\r')
