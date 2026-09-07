@@ -9,9 +9,11 @@
 
 **今天，和 AI 一起推进了什么？**
 
-把散落在 Codex、Claude Code 中的工作整理成一份有来源依据的 daily brief。在终端查看工作脉络、当前进展和参与情况，再按需深读一条工作线。
+把散落在 Codex、Claude Code、GitHub Copilot CLI 中的工作整理成一份有来源依据的 daily brief。在终端查看工作脉络、当前进展和参与情况，再按需深读一条工作线。
 
-![Agent Note CLI 交互终端预览](docs/assets/agent-note-preview.gif)
+![Agent Note CLI 交互终端预览：进入工作线、深读、滚动并返回](docs/assets/agent-note-preview.gif)
+
+这段约 20 秒的录屏按完整路径演示：进入工作线、打开已存深读、向下与向上滚动，再返回工作线列表。画面使用合成会话，不会调用模型。
 
 交互终端会把会话整理成可继续阅读的工作线，并保留来源与深读入口。
 
@@ -84,7 +86,7 @@ agent-note brief --source codex
   ↑↓/jk 移动  Enter打开  Esc返回  q退出
 ```
 
-方向键选择，Enter 打开，Esc 返回。列表支持 `/` 搜索；宽终端显示选中项预览，窄终端使用单列。工作线中按 `d` 深读、`s` 查看冻结原文、`e` 导出，长文用方向键和 Space 翻页。返回后保留列表选中项和阅读位置。
+方向键选择，Enter 打开，Esc 返回。列表支持 `/` 搜索；宽终端显示选中项预览，窄终端使用单列。工作线中按 `d` 深读、`s` 查看冻结原文、`e` 导出，长文支持 Vim 的 `Ctrl-F/B` 整页、`Ctrl-D/U` 半页，以及 Emacs 的 `Ctrl-V` / `Alt-V` 翻页；`Ctrl-N/P` 逐行移动，`PageDown/Up` 和 Space 仍可用。按 `?` 查看阅读键位。返回后保留列表选中项和阅读位置。
 
 浏览时只读取会话与已存结果；选择生成或刷新才使用模型额度。进度页按 Esc 取消并返回，失败后可以查看详情、重试或继续浏览。`agent-note ui --read-only` 全程禁止模型生成。下面使用测试样例说明输出结构，不代表真实模型效果：
 
@@ -107,6 +109,7 @@ Agent 的参与：完成工程实现。
 | 想做什么 | 命令 |
 | --- | --- |
 | 进入交互应用 | `agent-note ui` |
+| 只读 Copilot CLI 会话 | `agent-note ui --source copilot --read-only` |
 | 看今日工作脉络 | `agent-note brief` |
 | 回看指定日期 | `agent-note brief --date 2026-09-05` |
 | 只看当前项目 | `agent-note brief --project "$PWD"` |
@@ -116,6 +119,8 @@ Agent 的参与：完成工程实现。
 | 导出 Markdown | `agent-note brief --format markdown > today.md` |
 | 导出完整结构化结果 | `agent-note brief --format json > today.json` |
 | 查看所有选项 | `agent-note --help` |
+
+Copilot 会话自动从 `~/.copilot/session-state/*/events.jsonl` 读取，提取会话 ID、项目目录和用户/助手正文，并沿用冻结字节范围与哈希校验。支持范围是 [Copilot CLI 本地会话](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/chronicle)，不包含 VS Code 独立保存的聊天历史。`--source copilot` 只筛选输入来源；生成简报和深读仍使用现有 Codex / Claude 配置，不调用 Copilot 模型。
 
 这些选项可以组合。深读和重开时保持相同的 `--source`、`--project`、`--root` 与时区，才能定位到相同数据范围。
 
