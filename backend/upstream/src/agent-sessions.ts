@@ -46,7 +46,7 @@ export interface SessionScanOptions {
 
 export interface GeneratedSessionSummary {
   id: string;
-  platform: "codex" | "claude";
+  platform: "codex" | "claude" | "cursor";
   title: string;
   summary: string;
   artifacts: string[];
@@ -312,11 +312,12 @@ export function extractWorkSessionFromText(
     "未读到摘要，打开本地路径查看原始会话。";
   const projectPath = extractCanonicalProjectPath(parsed.records, platform);
   const branch = extractCanonicalBranch(parsed.records, platform);
-  const startedAt = firstUsefulText(collectStringsByKeys(parsed.records, ["timestamp", "createdAt", "startedAt"]));
+  const startedAt = firstUsefulText(collectStringsByKeys(parsed.records, ["timestamp", "createdAt", "startedAt"]))
+    ?? firstInstantIso(parsed.records, platform);
   const artifacts = collectArtifacts(parsed.records, projectPath).slice(0, 12);
   const status = normalizeStatus(firstUsefulText(collectStringsByKeys(parsed.records, ["status", "state", "phase"])));
   const resumeHint = identity.resumable ? resumeCommand(platform, id) : undefined;
-  const lineage = extractSessionLineage(parsed.records, platform);
+  const lineage = extractSessionLineage(parsed.records, platform, path);
 
   const session: AgentWorkSession = {
     id,
@@ -342,9 +343,14 @@ export function extractWorkSessionFromText(
 
 function extractSessionLineage(
   records: unknown[],
-  platform: AgentPlatform
+  platform: AgentPlatform,
+  path?: string
 ): AgentWorkSession["lineage"] | undefined {
   if (platform === "claude") return { origin: "primary" };
+  if (platform === "cursor") {
+    const parentSessionId = cursorIdentityFromPath(path ?? "")?.parentSessionId;
+    return parentSessionId ? { origin: "subagent", parentSessionId, agentRole: "worker" } : { origin: "primary" };
+  }
   if (platform !== "codex") return { origin: "unknown" };
   for (const value of records) {
     const record = asRecord(value);
@@ -433,8 +439,12 @@ async function collectCandidateFiles(
     }
 
     const preferred = (entry: string) => entry.includes(day.stamp) ||
-      (platform === "codex" && isCodexDateDirectory(joinPath(dir, entry), day.stamp));
+      (platform === "codex" && isCodexDateDirectory(joinPath(dir, entry), day.stamp)) ||
+      (platform === "cursor" && isCursorSessionDirectoryName(entry));
     for (const entry of entries.sort((a, b) => Number(preferred(b)) - Number(preferred(a)) || b.localeCompare(a))) {
+      // Skipped before the budget is charged: these accumulate once per compile call and
+      // would otherwise crowd real Sessions out of the discovery limits.
+      if (platform === "cursor" && isCompilerScratchWorkspace(entry)) continue;
       if ((!shallow && files.length >= limits.maxFiles) || (countEntries && inspected >= limits.maxEntries)) {
         truncated = true;
         return;
@@ -461,7 +471,8 @@ async function collectCandidateFiles(
           isInTargetDay(stat, day) ||
           fullPath.includes(day.stamp) ||
           (platform === "codex" &&
-            (isCodexDateDirectory(fullPath, day.stamp) || isCodexDateHierarchyDirectory(fullPath)));
+            (isCodexDateDirectory(fullPath, day.stamp) || isCodexDateHierarchyDirectory(fullPath))) ||
+          (platform === "cursor" && shouldDescendCursorDirectory(fullPath, depth));
         if (shouldDescend) await walk(fullPath, depth + 1);
       } else if (stat.isFile()) {
         const filePlatform = inferPlatform(fullPath, platform);
@@ -500,7 +511,7 @@ async function readSession(
   const canonicalPath = await fs.realpath(candidate.path);
   const bytes = await fs.readBytes(canonicalPath);
   const content = new TextDecoder().decode(bytes);
-  if (hasTargetDayActivity(content, day) === false) return null;
+  if (hasTargetDayActivity(content, day, candidate.platform) === false) return null;
   const session = extractWorkSessionFromText(content, canonicalPath, candidate.platform, candidate.updatedAt);
   if (session) {
     session.transcriptCapture = {
@@ -511,6 +522,7 @@ async function readSession(
     };
   }
   if (session && (isArchivedSessionPath(candidate.path) || isArchivedSessionPath(canonicalPath))) session.status = "completed";
+  if (session) await enrichCursorProjectPath(session, fs);
   if (session) await enrichWorkspaceMetadata(session, fs);
   return session;
 }
@@ -549,6 +561,9 @@ function extractSessionIdentity(
   platform: AgentPlatform
 ): { id: string; resumable: boolean } {
   let canonicalId: string | undefined;
+  // A Cursor subagent transcript is a child run of its parent chat, so its id is
+  // not something `agent --resume` can reopen.
+  let cursorSubagent = false;
 
   if (platform === "codex") {
     for (const value of records) {
@@ -567,12 +582,16 @@ function extractSessionIdentity(
       ]);
       if (canonicalId) break;
     }
+  } else if (platform === "cursor") {
+    const identity = cursorIdentityFromPath(path);
+    canonicalId = identity?.id;
+    cursorSubagent = Boolean(identity?.parentSessionId);
   }
 
   if (platform === "copilot") canonicalId = stringField(copilotSessionData(records), "sessionId");
 
-  if (canonicalId && (platform === "codex" || platform === "claude" || platform === "copilot")) {
-    return { id: canonicalId, resumable: true };
+  if (canonicalId && (platform === "codex" || platform === "claude" || platform === "copilot" || platform === "cursor")) {
+    return { id: canonicalId, resumable: !cursorSubagent };
   }
 
   const fallback =
@@ -599,6 +618,8 @@ function extractCanonicalProjectPath(records: unknown[], platform: AgentPlatform
       if (cwd?.trim()) return cleanOneLine(cwd);
     }
     return undefined;
+  } else if (platform === "cursor") {
+    return extractCursorProjectPath(records);
   }
   return firstUsefulText(collectStringsByKeys(records, ["projectPath", "workspace", "root"]));
 }
@@ -650,24 +671,17 @@ function parseSessionText(content: string): ParsedText {
   return { records: [], plainText: trimmed };
 }
 
-function hasTargetDayActivity(content: string, day: ActivityWindow): boolean | undefined {
+function hasTargetDayActivity(content: string, day: ActivityWindow, platform: AgentPlatform): boolean | undefined {
   let sawCanonicalTimestamp = false;
   for (const line of content.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("{")) continue;
     try {
       const record = JSON.parse(trimmed) as unknown;
-      const timestamp = recordField(record, "timestamp");
-      if (typeof timestamp !== "string" && typeof timestamp !== "number") continue;
-      const instant =
-        typeof timestamp === "number"
-          ? timestamp > 9_999_999_999
-            ? timestamp
-            : timestamp * 1000
-          : Date.parse(timestamp);
-      if (!Number.isFinite(instant)) continue;
-      sawCanonicalTimestamp = true;
-      if (instant >= day.start && instant < day.targetEnd) return true;
+      for (const instant of recordInstants(record, platform)) {
+        sawCanonicalTimestamp = true;
+        if (instant >= day.start && instant < day.targetEnd) return true;
+      }
     } catch {
       // Malformed event lines are ignored; metadata fallback remains available.
     }
@@ -773,7 +787,7 @@ function normalizeGeneratedArtifacts(artifacts: string[], session: AgentWorkSess
         .filter((artifact) => !/\.jsonl$/i.test(artifact))
         .filter((artifact) => !artifact.split(/[\\/]/).some((segment) => segment.startsWith(".")))
         .filter((artifact) => !/(?:^|[\\/])[0-9a-f]{8}-[0-9a-f-]{27,}(?:\.[a-z0-9]+)?$/i.test(artifact))
-        .filter((artifact) => !/[\\/](?:\.codex[\\/]sessions|\.claude[\\/]projects)[\\/]/i.test(artifact))
+        .filter((artifact) => !/[\\/](?:\.codex[\\/]sessions|\.claude[\\/]projects|\.cursor[\\/]projects)[\\/]/i.test(artifact))
         .filter((artifact) => /[\\/]/.test(artifact) || /^[^.][^\\/]*\.[A-Za-z0-9]{1,8}$/.test(artifact))
     )
   ).slice(0, 12);
@@ -781,9 +795,9 @@ function normalizeGeneratedArtifacts(artifacts: string[], session: AgentWorkSess
 
 function firstUsefulText(values: string[]): string | undefined {
   for (const value of values) {
-    const cleaned = cleanOneLine(value);
+    const cleaned = cleanOneLine(unwrapUserFacingText(value));
     if (!cleaned) continue;
-    if (isNoiseText(cleaned)) continue;
+    if (isNoiseText(cleaned) || isCursorHarnessText(cleaned)) continue;
     return cleaned;
   }
   return undefined;
@@ -821,6 +835,7 @@ function resumeCommand(platform: AgentPlatform, id: string): string | undefined 
   if (platform === "codex") return `codex resume ${id}`;
   if (platform === "claude") return `claude --resume ${id}`;
   if (platform === "copilot") return `copilot --resume=${id}`;
+  if (platform === "cursor") return `agent --resume ${id}`;
   return undefined;
 }
 
@@ -949,9 +964,159 @@ function isCodexDateHierarchyDirectory(path: string): boolean {
   return /\/(?:20\d{2}|20\d{2}\/\d{2}|20\d{2}\/\d{2}\/\d{2})$/.test(normalized);
 }
 
+const CURSOR_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const CURSOR_HARNESS_PREFIXES = [
+  "the beginning of the above subagent result",
+  "perform any necessary follow-up actions in response to the subagent",
+  "briefly inform the user about the task result",
+  "your previous response was interrupted",
+  "continue with the questionnaire results",
+  "start multitasking"
+];
+
+// Cursor Agent CLI has no ephemeral or no-persistence flag, so every compile call
+// leaves a chat under ~/.cursor/projects keyed by the throwaway workspace it ran in.
+// Those transcripts hold this tool's own prompts and must never re-enter the corpus.
+const COMPILER_SCRATCH_WORKSPACE = /(?:^|[\\/-])(?:structured-today-call|agent-notebook-evidence)-/i;
+
+function isCompilerScratchWorkspace(name: string): boolean {
+  return COMPILER_SCRATCH_WORKSPACE.test(name);
+}
+
+function isCursorSessionDirectoryName(name: string): boolean {
+  return /^agent-transcripts$/i.test(name) || /^subagents$/i.test(name) || new RegExp(`^${CURSOR_UUID}$`, "i").test(name);
+}
+
+function shouldDescendCursorDirectory(path: string, depth: number): boolean {
+  const normalized = path.replace(/\\/g, "/");
+  const name = normalized.split("/").filter(Boolean).pop() ?? "";
+  if (isCursorSessionDirectoryName(name) || /\/agent-transcripts(?:\/|$)/i.test(normalized)) return true;
+  return depth === 0;
+}
+
+function cursorIdentityFromPath(path: string): { id: string; parentSessionId?: string } | undefined {
+  const normalized = path.replace(/\\/g, "/");
+  const subagent = normalized.match(new RegExp(`/(${CURSOR_UUID})/subagents/(${CURSOR_UUID})(?:\\.[a-z0-9]+)?$`, "i"));
+  if (subagent) return { id: subagent[2]!, parentSessionId: subagent[1]! };
+  const primary = normalized.match(new RegExp(`/(${CURSOR_UUID})/(${CURSOR_UUID})(?:\\.[a-z0-9]+)?$`, "i"));
+  if (primary) return { id: primary[2]! };
+  const stem = basenameStem(path);
+  return new RegExp(`^${CURSOR_UUID}$`, "i").test(stem) ? { id: stem } : undefined;
+}
+
+function extractCursorProjectPath(records: unknown[]): string | undefined {
+  const canonical = collectStringsByKeys(records, ["cwd", "projectPath", "workspace"])
+    .find((value) => value.startsWith("/"));
+  if (canonical) return canonical;
+  // ponytail: tool paths only infer a common directory; explicit workspace metadata wins.
+  const paths = [
+    ...collectStringsByKeys(records, ["target_directory"]),
+    ...collectStringsByKeys(records, ["path"]).map((value) => value.replace(/\/[^/]+$/, ""))
+  ].filter((value) => value.startsWith("/") && value !== "/");
+  if (!paths.length) return undefined;
+  const common = commonDirectoryPrefix(paths);
+  return common && common !== "/" ? common : undefined;
+}
+
+function commonDirectoryPrefix(paths: string[]): string | undefined {
+  const split = paths.map((value) => value.split("/").filter(Boolean));
+  const first = split[0];
+  if (!first) return undefined;
+  const prefix: string[] = [];
+  for (let index = 0; index < first.length; index += 1) {
+    const part = first[index];
+    if (!part || split.some((item) => item[index] !== part)) break;
+    prefix.push(part);
+  }
+  return prefix.length ? `/${prefix.join("/")}` : undefined;
+}
+
+async function enrichCursorProjectPath(session: AgentWorkSession, fs: RuntimeFileSystem): Promise<void> {
+  if (session.platform !== "cursor" || session.projectPath) return;
+  const slug = cursorProjectSlugFromPath(session.path);
+  if (!slug) return;
+  const resolved = await resolveCursorProjectSlug(slug, fs);
+  if (resolved) session.projectPath = resolved;
+}
+
+function cursorProjectSlugFromPath(path: string): string | undefined {
+  const match = path.replace(/\\/g, "/").match(/(?:^|\/)\.cursor\/projects\/([^/]+)\/agent-transcripts\//i);
+  return match?.[1];
+}
+
+async function resolveCursorProjectSlug(slug: string, fs: RuntimeFileSystem): Promise<string | undefined> {
+  let remaining = slug;
+  let current = "/";
+  while (remaining) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(current);
+    } catch {
+      return undefined;
+    }
+    let best: { name: string; normalized: string } | undefined;
+    for (const name of entries) {
+      const normalized = name.replace(/_/g, "-");
+      if (remaining === normalized || remaining.startsWith(`${normalized}-`)) {
+        if (best) return undefined;
+        best = { name, normalized };
+      }
+    }
+    if (!best) return undefined;
+    current = current === "/" ? `/${best.name}` : `${current}/${best.name}`;
+    remaining = remaining === best.normalized ? "" : remaining.slice(best.normalized.length + 1);
+  }
+  try {
+    return (await fs.stat(current)).isDirectory() ? current : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function recordInstants(value: unknown, platform: AgentPlatform): number[] {
+  const timestamp = recordField(value, "timestamp");
+  const instant = typeof timestamp === "number"
+    ? timestamp > 9_999_999_999 ? timestamp : timestamp * 1000
+    : typeof timestamp === "string" ? Date.parse(timestamp) : NaN;
+  if (Number.isFinite(instant)) return [instant];
+  if (platform !== "cursor") return [];
+  const record = asRecord(value);
+  const message = asRecord(record?.message);
+  if ((record?.role ?? message?.role) !== "user") return [];
+  const text = collectTextFragments(message?.content ?? record?.content).join("\n");
+  const tagged = text.match(/^\s*<timestamp>\s*([^<]+?)\s*<\/timestamp>/i);
+  const embedded = tagged ? Date.parse(tagged[1]!.trim()) : NaN;
+  return Number.isFinite(embedded) ? [embedded] : [];
+}
+
+function firstInstantIso(records: unknown[], platform: AgentPlatform): string | undefined {
+  for (const record of records) {
+    const instant = recordInstants(record, platform)[0];
+    if (instant !== undefined) return new Date(instant).toISOString();
+  }
+  return undefined;
+}
+
+function unwrapUserFacingText(value: string): string {
+  const query = value.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/i);
+  if (query?.[1]?.trim()) return query[1].trim();
+  return value.replace(/<timestamp>\s*[^<]*<\/timestamp>\s*/gi, "").trim() || value;
+}
+
+function isCursorHarnessText(value: string): boolean {
+  const low = value.trim().toLowerCase();
+  return CURSOR_HARNESS_PREFIXES.some((prefix) => low.startsWith(prefix));
+}
+
 function inferPlatform(path: string, fallback: AgentPlatform = "other"): AgentPlatform {
+  if (fallback !== "other") return fallback;
   const lower = path.toLowerCase();
+  const canonical = lower.replace(/\\/g, "/").match(/(?:^|\/)\.(codex|claude|copilot|cursor)(?:\/|$)/)?.[1];
+  if (canonical) return canonical as SessionProvider;
   if (lower.includes("copilot")) return "copilot";
+  if (lower.includes(".cursor") || lower.includes("agent-transcripts") || /(^|[\\/])cursor([\\/]|$)/i.test(lower)) {
+    return "cursor";
+  }
   if (lower.includes("codex")) return "codex";
   if (lower.includes("claude")) return "claude";
   if (lower.includes("minimax") || lower.includes("mini-max")) return "minimax";
@@ -960,7 +1125,7 @@ function inferPlatform(path: string, fallback: AgentPlatform = "other"): AgentPl
 
 function isCandidateSessionFile(path: string, platform: AgentPlatform): boolean {
   if (platform === "copilot") return /(?:^|[\\/])events\.jsonl$/i.test(path);
-  if (platform === "codex" || platform === "claude") return /\.jsonl$/i.test(path);
+  if (platform === "codex" || platform === "claude" || platform === "cursor") return /\.jsonl$/i.test(path);
   return false;
 }
 
@@ -998,6 +1163,10 @@ function isNoiseText(value: string): boolean {
     /^Cancelled at\b/i.test(value) ||
     /^\[\d{4}-\d{2}-\d{2}[ T]/.test(value) ||
     value.startsWith("<environment_context>") ||
+    value.startsWith("<timestamp>") ||
+    value.startsWith("<user_query>") ||
+    value === "[REDACTED]" ||
+    isCursorHarnessText(value) ||
     value.startsWith("<permissions instructions>") ||
     value.startsWith("<collaboration_mode>") ||
     value.startsWith("<recommended_plugins>") ||

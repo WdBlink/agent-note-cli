@@ -21,10 +21,10 @@ export function parseSessionTranscript(input: {
   const records = lines.map(parseRecord).filter((record): record is Record<string, unknown> => Boolean(record));
   const malformed = lines.length - records.length;
   const userAuthorKind = input.userAuthorKind ?? "unknown";
-  const primary = input.platform === "claude"
-    ? parseClaudeMessages(records, userAuthorKind)
+  const primary = input.platform === "codex"
+    ? parseCodexMessages(records, userAuthorKind)
     : input.platform === "copilot" ? parseCopilotMessages(records)
-      : parseCodexMessages(records, userAuthorKind);
+    : parseRoleTranscriptMessages(records, userAuthorKind, input.platform === "cursor" ? "cursor" : "claude");
   const limited = limitMessages(deduplicateMessages(primary.messages));
   const contentTruncated = limited.truncated;
   const state: SessionTranscriptState = {
@@ -105,7 +105,11 @@ function parseCodexMessages(records: Record<string, unknown>[], userAuthorKind: 
   };
 }
 
-function parseClaudeMessages(records: Record<string, unknown>[], userAuthorKind: "human" | "agent" | "automation" | "unknown"): {
+function parseRoleTranscriptMessages(
+  records: Record<string, unknown>[],
+  userAuthorKind: "human" | "agent" | "automation" | "unknown",
+  platform: "claude" | "cursor"
+): {
   messages: SessionTranscriptMessage[];
   activityWindows: SessionTranscriptActivityWindow[];
   omittedToolEvents: number;
@@ -116,20 +120,21 @@ function parseClaudeMessages(records: Record<string, unknown>[], userAuthorKind:
   let omittedToolEvents = 0;
   for (const [index, record] of records.entries()) {
     const nested = asRecord(record.message);
-    const timestamp = cleanTimestamp(record.timestamp);
-    const role = normalizeRole(nested?.role ?? record.type);
+    const timestamp = cleanTimestamp(record.timestamp) ?? (platform === "cursor" && (nested?.role ?? record.role) === "user" ? timestampFromCursorText(nested?.content ?? record.content) : undefined);
+    const role = normalizeRole(nested?.role ?? record.role ?? record.type);
     if (role) {
       const content = extractContent(nested?.content ?? record.content);
       if (content) messages.push(message(record.uuid, index, role, content, timestamp, userAuthorKind));
     }
     for (const item of arrayRecords(nested?.content)) {
       if (item.type === "tool_use") {
-        const callId = cleanText(item.id);
-        if (callId && timestamp) toolStarts.set(callId, timestamp);
+        const callId = cleanText(item.id) ?? `${platform}-tool-${index}`;
+        if (timestamp) toolStarts.set(callId, timestamp);
+        omittedToolEvents += 1;
       } else if (item.type === "tool_result") {
         const callId = cleanText(item.tool_use_id);
         if (callId) {
-          pushActivityWindow(activityWindows, `claude-tool-${callId}`, toolStarts.get(callId), timestamp, "tool-execution");
+          pushActivityWindow(activityWindows, `${platform}-tool-${callId}`, toolStarts.get(callId), timestamp, "tool-execution");
           toolStarts.delete(callId);
         }
       }
@@ -174,6 +179,14 @@ function parseCopilotMessages(records: Record<string, unknown>[]): {
     }
   }
   return { messages, activityWindows, omittedToolEvents };
+}
+
+function timestampFromCursorText(value: unknown): string | undefined {
+  const text = extractContent(value);
+  const tagged = text?.match(/^\s*<timestamp>\s*([^<]+?)\s*<\/timestamp>/i);
+  if (!tagged) return undefined;
+  const parsed = Date.parse(tagged[1]!.trim());
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
 }
 
 function pushActivityWindow(

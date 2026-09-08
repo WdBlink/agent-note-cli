@@ -4,9 +4,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { CliRunner, CliRunResult } from "./agent-summary";
-import { codexCompilerArgs, parseClaudeOutput, parseCodexOutput } from "./agent-summary";
+import { codexCompilerArgs, compilerCliPath, cursorCompilerArgs, parseClaudeOutput, parseCodexOutput, parseCursorOutput } from "./agent-summary";
 import { CliProtocolError } from "./cli-output-collector";
-import type { AgentPlatform, AgentTranscriptCapture, AgentWorkSession, CockpitSettings, SessionProvider } from "./types";
+import type { AgentPlatform, AgentTranscriptCapture, AgentWorkSession, CockpitSettings, CompilerProvider, SessionProvider } from "./types";
 import {
   recoverWorklineTransport,
   WORKLINE_TRANSPORT_RECOVERY_MARKER
@@ -126,7 +126,7 @@ export function normalizeDailyReviewPackage(value: unknown, expectedDate?: strin
   const evidenceCutoff = cleanTimestamp(record.evidenceCutoff);
   const promptProfile = cleanText(record.promptProfile, 160);
   const model = cleanText(record.model, 160);
-  const compilerProvider = record.compilerProvider === "claude" ? "claude" : record.compilerProvider === "codex" ? "codex" : undefined;
+  const compilerProvider = normalizeCompilerProvider(record.compilerProvider);
   const rawOutput = asRecord(record.rawOutput);
   if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(logicalDate) || (expectedDate && logicalDate !== expectedDate) || !generatedAt || !evidenceCutoff || !promptProfile || !model || !compilerProvider || !rawOutput) return undefined;
 
@@ -330,19 +330,19 @@ export async function compileDailyWorklineReview(
     await fs.writeFile(outputSchemaPath, JSON.stringify(WORKLINE_REVIEW_TRANSPORT_SCHEMA), { encoding: "utf8", mode: 0o400, flag: "wx" });
     const promptEvidence = buildFrozenPromptEvidence(evidence, frozenSessions);
     const prompt = buildWorklineReviewPrompt(logicalDate, frozenSessions, promptEvidence);
-    const failures: Array<{ provider: SessionProvider; message: string }> = [];
-    let provider: SessionProvider | undefined;
+    const failures: Array<{ provider: CompilerProvider; message: string }> = [];
+    let provider: CompilerProvider | undefined;
     let model = "";
     let result: CliRunResult | undefined;
     try {
       for (const [index, candidate] of providers.entries()) {
         const candidateModel = (index === 0 ? cleanText(options.model, 120) : "") || defaultModel(candidate);
-        const command = expandHome(candidate === "codex" ? settings.codexCliPath : settings.claudeCliPath, homeDir);
+        const command = expandHome(compilerCliPath(settings, candidate), homeDir);
         try {
           result = await runner({
             command,
             args: reviewCompilerArgs(candidate, candidateModel, outputSchemaPath),
-            stdin: prompt,
+            stdin: candidate === "cursor" ? cursorInlineSchemaPrompt(prompt) : prompt,
             cwd: frozenRoot,
             timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
             stdoutMode: candidate === "codex" ? "codex-jsonl" : "single-json"
@@ -371,9 +371,11 @@ export async function compileDailyWorklineReview(
       };
       parsed = provider === "codex"
         ? parseCodexOutput(result.stdout, parseFinalText)
-        : parseClaudeOutput(result.stdout, parseFinalText);
-      // Claude may return structured_output directly rather than a result string.
-      if (!transportRecovered && provider === "claude") {
+        : provider === "cursor"
+          ? parseCursorOutput(result.stdout, parseFinalText)
+          : parseClaudeOutput(result.stdout, parseFinalText);
+      // Claude and Cursor may return structured_output or a result object rather than a result string.
+      if (!transportRecovered && provider !== "codex") {
         parsed = recoverWorklineTransport(JSON.stringify(parsed), WORKLINE_REVIEW_TRANSPORT_SCHEMA).value;
       }
     } catch (error) {
@@ -880,21 +882,26 @@ function normalizeParticipationKind(value: unknown): DailyReviewParticipationKin
 }
 
 function normalizePlatform(value: unknown): AgentPlatform | undefined {
-  return value === "codex" || value === "claude" || value === "minimax" || value === "other" ? value : undefined;
+  return value === "codex" || value === "claude" || value === "cursor" || value === "minimax" || value === "other" ? value : undefined;
 }
 
-function compilerProviders(enabled: SessionProvider[], preferred?: SessionProvider): SessionProvider[] {
-  const ordered: SessionProvider[] = [];
+function normalizeCompilerProvider(value: unknown): SessionProvider | undefined {
+  return value === "codex" || value === "claude" || value === "cursor" ? value : undefined;
+}
+
+function compilerProviders(enabled: SessionProvider[], preferred?: SessionProvider): CompilerProvider[] {
+  const ordered: CompilerProvider[] = [];
   if (preferred && preferred !== "copilot" && enabled.includes(preferred)) ordered.push(preferred);
-  for (const provider of ["codex", "claude"] as const) {
+  for (const provider of ["codex", "claude", "cursor"] as const) {
     if (enabled.includes(provider) && !ordered.includes(provider)) ordered.push(provider);
   }
-  if (ordered.length === 0) throw new Error("请先在 Sources 中启用 Codex 或 Claude Code。");
+  if (ordered.length === 0) throw new Error("请先在 Sources 中启用 Codex、Claude Code 或 Cursor。");
   return ordered;
 }
 
 function reviewCompilerArgs(provider: SessionProvider, model: string, outputSchemaPath: string): string[] {
   if (provider === "codex") return codexCompilerArgs(model === "default" ? undefined : model, outputSchemaPath);
+  if (provider === "cursor") return cursorCompilerArgs(model === "default" ? undefined : model);
   return [
     ...(model === "default" ? [] : ["--model", model]),
     "--print",
@@ -911,15 +918,31 @@ function reviewCompilerArgs(provider: SessionProvider, model: string, outputSche
   ];
 }
 
+// Codex reads the schema from --output-schema and Claude Code from --json-schema.
+// Cursor Agent CLI has neither, so the contract has to travel inside the prompt.
+function cursorInlineSchemaPrompt(prompt: string): string {
+  return [
+    prompt,
+    "",
+    "Return one JSON object satisfying this JSON Schema, and nothing else. Do not wrap it in markdown.",
+    "Where the schema pins a value with enum, copy that value byte for byte. Never retype, complete, or re-derive an identifier that already appears in the schema or the prompt.",
+    JSON.stringify(WORKLINE_REVIEW_TRANSPORT_SCHEMA)
+  ].join("\n");
+}
+
 function compilerProviderLabel(provider: SessionProvider): string {
-  return provider === "codex" ? "Codex" : "Claude Code";
+  return provider === "codex" ? "Codex" : provider === "claude" ? "Claude Code" : "Cursor";
 }
 
 function defaultModel(provider: SessionProvider): string {
   const environment = typeof process !== "undefined" ? process.env : {};
-  return provider === "codex"
-    ? environment.AGENT_NOTEBOOK_CODEX_REVIEW_MODEL?.trim() || environment.AGENT_NOTEBOOK_CODEX_SUMMARY_MODEL?.trim() || "gpt-5.3-codex-spark"
-    : environment.AGENT_NOTEBOOK_CLAUDE_REVIEW_MODEL?.trim() || environment.AGENT_NOTEBOOK_CLAUDE_SUMMARY_MODEL?.trim() || "fable";
+  if (provider === "codex") {
+    return environment.AGENT_NOTEBOOK_CODEX_REVIEW_MODEL?.trim() || environment.AGENT_NOTEBOOK_CODEX_SUMMARY_MODEL?.trim() || "gpt-5.3-codex-spark";
+  }
+  if (provider === "claude") {
+    return environment.AGENT_NOTEBOOK_CLAUDE_REVIEW_MODEL?.trim() || environment.AGENT_NOTEBOOK_CLAUDE_SUMMARY_MODEL?.trim() || "fable";
+  }
+  return environment.AGENT_NOTEBOOK_TODAY_CURSOR_MODEL?.trim() || environment.AGENT_NOTEBOOK_CURSOR_REVIEW_MODEL?.trim() || "default";
 }
 
 function sessionKey(session: Pick<AgentWorkSession, "platform" | "id">): string {

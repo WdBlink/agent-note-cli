@@ -28,7 +28,7 @@
 
 ## 它解决什么
 
-Codex、Claude Code 和 GitHub Copilot CLI 的工作结果通常散落在会话文件里。Agent Note CLI 读取这些本地会话，沿用 Agent Notebook 的 Today 后端，把当天的推进整理成一份能继续阅读的工作脉络。
+Codex、Claude Code、GitHub Copilot CLI 和 Cursor 的工作结果通常散落在会话文件里。Agent Note CLI 读取这些本地会话，沿用 Agent Notebook 的 Today 后端，把当天的推进整理成一份能继续阅读的工作脉络。
 
 | 结果 | 你会看到什么 |
 | --- | --- |
@@ -52,6 +52,8 @@ agent-note --version
 Homebrew 会安装所需的 Node.js，发布包自带锁定的运行时依赖。
 
 ### 2. 选择阅读或生成
+
+生成需要已登录的 Codex、Claude Code 或 [Cursor Agent CLI](https://cursor.com/docs/cli/using)（`agent`）。`--source` 选择本地会话，`--compiler` 可单独指定整理用的 CLI。
 
 已有结果，只想本地阅读：
 
@@ -118,6 +120,7 @@ v0.6.0 提供实验性的[会话直达](docs/session-jump.md)：复用已定位�
 | 进入交互应用 | `agent-note ui` |
 | 看今日工作脉络 | `agent-note brief` |
 | 指定来源 | `agent-note brief --source codex` 或 `--source claude` |
+| 读 Cursor 会话，用 Claude 整理 | `agent-note brief --source cursor --compiler claude` |
 | 只读 Copilot CLI 会话 | `agent-note ui --source copilot --read-only` |
 | 回看指定日期 | `agent-note brief --date 2026-09-05` |
 | 只看当前项目 | `agent-note brief --project "$PWD"` |
@@ -148,7 +151,7 @@ Agent 的参与：完成工程实现。
 
 ## 来源、数据与隐私
 
-- 默认读取 `~/.codex/sessions`、`~/.codex/archived_sessions`、`~/.claude/projects`；Copilot CLI 会话来自 `~/.copilot/session-state/*/events.jsonl`。
+- 默认读取 `~/.codex/sessions`、`~/.codex/archived_sessions`、`~/.claude/projects`；Copilot CLI 会话来自 `~/.copilot/session-state/*/events.jsonl`，Cursor JSONL 会话来自 `~/.cursor/projects/*/agent-transcripts/`。
 - 原始会话只读。结果和恢复状态默认保存到 `~/.local/share/agent-note`，可用 `--data-dir` 修改。
 - `--read-only` 只读取会话和已有结果，不会调用模型；它仍可能创建本地缓存、资产存储和短暂锁目录。
 - 生成、刷新或首次深读会把后端选择的会话证据发送给对应 provider；证据可能包含代码、路径、反思或秘密，当前版本不自动脱敏。
@@ -190,7 +193,7 @@ brew upgrade wdblink/tap/agent-note-cli
 brew uninstall agent-note-cli
 ```
 
-卸载不会删除本地 brief、恢复数据或 Codex / Claude Code 会话。
+卸载不会删除本地 brief、恢复数据或 Codex / Claude Code / Copilot / Cursor 会话。
 
 ## 相关链接
 

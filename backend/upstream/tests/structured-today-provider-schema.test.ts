@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { z } from "zod";
-import { structuredTodayProviderSchema } from "../app/desktop/structured-today-cli-caller";
+import {
+  structuredTodayProviderSchema,
+  freezeStructuredTodayProviderPlan,
+  createStructuredTodayCliCaller
+} from "../app/desktop/structured-today-cli-caller";
+import { DEFAULT_SETTINGS } from "../src/constants";
 import {
   SessionDigestCandidateSchema,
   sha256Text
 } from "../src/structured-today-contracts";
 import { createStructuredTodayModelFunctions } from "../src/structured-today-model-functions";
+import { parseCursorOutput } from "../src/agent-summary";
 
 test("provider schemas remove the unsupported draft declaration", () => {
   const canonical = z.toJSONSchema(SessionDigestCandidateSchema);
@@ -15,6 +21,122 @@ test("provider schemas remove the unsupported draft declaration", () => {
   const claude = structuredTodayProviderSchema(canonical, "claude");
   assert.equal(claude.$schema, undefined);
   assert.deepEqual(claude.properties, canonical.properties);
+});
+
+test("Cursor-only sources digest and synthesize with Cursor Agent CLI", () => {
+  const plan = freezeStructuredTodayProviderPlan(
+    { ...DEFAULT_SETTINGS, enabledSessionProviders: ["cursor"] },
+    [{ sessionId: "cursor-session", provider: "cursor" }]
+  );
+  assert.equal(plan.digestBySessionId["cursor-session"], "cursor");
+  assert.equal(plan.functionProviders.SynthesizeWorklineIndex, "cursor");
+  assert.equal(plan.functionProviders.CritiqueWorklineDossier, "cursor");
+  assert.equal(plan.models.cursor, "default");
+});
+
+test("mixed sources keep Codex as primary, Claude as critic, and digest Cursor sessions with Cursor", () => {
+  const plan = freezeStructuredTodayProviderPlan(
+    DEFAULT_SETTINGS,
+    [
+      { sessionId: "codex-session", provider: "codex" },
+      { sessionId: "claude-session", provider: "claude" },
+      { sessionId: "cursor-session", provider: "cursor" }
+    ]
+  );
+  assert.equal(plan.digestBySessionId["codex-session"], "codex");
+  assert.equal(plan.digestBySessionId["claude-session"], "claude");
+  assert.equal(plan.digestBySessionId["cursor-session"], "cursor");
+  assert.equal(plan.functionProviders.SynthesizeWorklineIndex, "codex");
+  assert.equal(plan.functionProviders.CritiqueWorklineDossier, "claude");
+});
+
+test("Cursor compiler calls agent CLI and parses a Claude-shaped JSON envelope", async () => {
+  const plan = freezeStructuredTodayProviderPlan(
+    { ...DEFAULT_SETTINGS, enabledSessionProviders: ["cursor"] },
+    [{ sessionId: "cursor-session", provider: "cursor" }]
+  );
+  let request: { command: string; args: string[]; stdin: string; cwd: string; stdoutMode?: string } | undefined;
+  const caller = createStructuredTodayCliCaller({
+    settings: { ...DEFAULT_SETTINGS, enabledSessionProviders: ["cursor"], cursorCliPath: "agent" },
+    plan,
+    timeoutMs: 1_000,
+    async runner(input) {
+      request = input;
+      const output = {
+        sessionId: "cursor-session",
+        summary: "summary",
+        currentStop: "stop",
+        participation: { human: "human", agent: null, joint: null, undeterminedReason: null },
+        evidenceIds: ["evidence-1"],
+        uncertainties: []
+      };
+      return {
+        stdout: JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: JSON.stringify(output)
+        }),
+        stderr: ""
+      };
+    }
+  });
+  const result = await caller.call({
+    functionName: "DigestSession",
+    functionVersion: "DigestSession/structured-v1",
+    instructions: "Digest exactly one session.",
+    variables: { expectedSessionId: "cursor-session" },
+    outputJsonSchema: { type: "object", properties: { sessionId: { type: "string" } } }
+  });
+  assert.ok(request);
+  assert.equal(request.command, "agent");
+  assert.deepEqual(request.args.slice(0, 8), [
+    "--print",
+    "--output-format",
+    "json",
+    "--mode",
+    "ask",
+    "--trust",
+    "--sandbox",
+    "enabled"
+  ]);
+  assert.equal(request.stdoutMode, "single-json");
+  // Cursor has no structured-output flag, so the schema must reach it inline.
+  assert.match(request.stdin, /"properties":\{"sessionId":\{"type":"string"\}\}/);
+  assert.doesNotMatch(request.stdin, /output\.schema\.json/);
+  assert.doesNotMatch(request.stdin, new RegExp(request.cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(result.provider, "cursor");
+  assert.equal(result.model, "default");
+  assert.ok(!request.args.includes("--model"), "the account default model is left to the CLI");
+  assert.equal((result.output as { sessionId?: string }).sessionId, "cursor-session");
+});
+
+// Observed against Cursor Agent CLI 2026.09.02: a complete synthesis object arrived
+// with a stray closing brace appended on the next line.
+test("a Cursor reply framed with stray text still yields the first complete value", () => {
+  const value = { worklines: [{ worklineId: "w-1", sessionIds: ["s-1"] }], unresolvedSessionIds: [] };
+  const envelope = (result: string) => JSON.stringify({ type: "result", subtype: "success", is_error: false, result });
+
+  assert.deepEqual(parseCursorOutput(envelope(JSON.stringify(value))), value);
+  assert.deepEqual(parseCursorOutput(envelope(`${JSON.stringify(value)}\n}`)), value);
+  assert.deepEqual(parseCursorOutput(envelope("```json\n" + JSON.stringify(value) + "\n```")), value);
+  assert.deepEqual(parseCursorOutput(envelope(`这是结果：\n${JSON.stringify(value)}\n以上。`)), value);
+  assert.throws(() => parseCursorOutput(envelope("no JSON at all")), /Cursor|JSON/);
+});
+
+test("Cursor transport never rewrites a mismatched pinned evidence identifier", async () => {
+  const settings = { ...DEFAULT_SETTINGS, enabledSessionProviders: ["cursor" as const] };
+  const caller = createStructuredTodayCliCaller({
+    settings,
+    plan: freezeStructuredTodayProviderPlan(settings, [{ sessionId: "expected", provider: "cursor" }]),
+    runner: async () => ({ stdout: JSON.stringify({ result: JSON.stringify({ sessionId: "wrong", evidenceIds: ["foreign"] }) }), stderr: "" })
+  });
+  const result = await caller.call({
+    functionName: "DigestSession", functionVersion: "test", instructions: "digest",
+    variables: { expectedSessionId: "expected" },
+    outputJsonSchema: { type: "object", properties: { sessionId: { enum: ["expected"] }, evidenceIds: { type: "array", items: { enum: ["allowed"] } } } }
+  });
+  assert.deepEqual(result.output, { sessionId: "wrong", evidenceIds: ["foreign"] });
 });
 
 test("Codex provider schema requires every declared property recursively", () => {

@@ -8,7 +8,7 @@ import { Terminal } from './terminal.mjs';
 import { version, checkForUpdate, readReleaseNotes, upgradeInstructions } from './updates.mjs';
 import { inspectSessionTargets, jumpToSession } from './session-jump.mjs';
 
-const sourceNames = { all: 'Codex + Claude + Copilot', codex: 'Codex', claude: 'Claude Code', copilot: 'GitHub Copilot' };
+const sourceNames = { all: 'Codex + Claude + Copilot + Cursor', codex: 'Codex', claude: 'Claude Code', copilot: 'GitHub Copilot', cursor: 'Cursor' };
 const modeNames = { raw: '尚未生成', compiled: '已保存', stale: '来源有变化' };
 const expand = value => path.resolve(value === '~' ? os.homedir() : value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value);
 const ref = index => index && ({ artifactId: index.artifactId, revision: index.revision, contentHash: index.contentHash });
@@ -286,15 +286,16 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
   }
 
   async function providers() {
-    const choice = await terminal.menu({ title: '会话来源', description: '选择本地会话来源。Copilot 来源使用已配置的 Codex / Claude 生成简报。', items: [
-      option('codex', 'Codex', options.source === 'codex' ? '当前选择' : '只使用 Codex CLI'),
-      option('claude', 'Claude Code', options.source === 'claude' ? '当前选择' : '只使用 Claude Code CLI'),
+    const choice = await terminal.menu({ title: '会话来源', description: '选择本地会话来源。生成使用 Codex、Claude Code 或 Cursor Agent CLI；--compiler 可固定整理模型，Copilot 使用已配置的模型 CLI。', items: [
+      option('codex', 'Codex', options.source === 'codex' ? '当前选择' : '只读取 Codex 会话，并用 Codex CLI 整理'),
+      option('claude', 'Claude Code', options.source === 'claude' ? '当前选择' : '只读取 Claude Code 会话，并用 Claude Code CLI 整理'),
       option('copilot', 'GitHub Copilot', options.source === 'copilot' ? '当前选择' : '读取本地 Copilot CLI 会话'),
-      option('all', 'Codex + Claude + Copilot', options.source === 'all' ? '当前选择' : '读取全部来源；生成使用 Codex / Claude')
+      option('cursor', 'Cursor', options.source === 'cursor' ? '当前选择' : '只读取 Cursor Agent transcript，并用 Cursor Agent CLI 整理'),
+      option('all', '全部来源', options.source === 'all' ? '当前选择' : 'Codex、Claude Code、Copilot 与 Cursor')
     ] });
     if (choice) {
       options.source = choice.id;
-      if (choice.id === 'all') options.settings = { ...options.settings, enabledSessionProviders: ['codex', 'claude', 'copilot'] };
+      if (choice.id === 'all') options.settings = { ...options.settings, enabledSessionProviders: ['codex', 'claude', 'copilot', 'cursor'] };
       invalidate();
       await perform('保存来源偏好', async () => { await persistPreferences({ source: options.source }); return true; });
     }
@@ -333,7 +334,7 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
         option('brief', '工作脉络', view?.index ? `${view.index.worklines.length} 条工作线 · ${modeNames[view.mode]}` : '阅读简报，按工作线继续深读', 'WORK / 工作脉络\n\n从会话里找回推进的事情、当前停点和你的参与。\n\n已有简报直接阅读，新的整理由你发起。'),
         option('dates', '回看日期', options.date, 'HISTORY / 回看\n\n选择今天、最近几天或任意日期。\n\n每一天都保留自己的工作脉络。'),
         option('projects', '选择项目', options.project ?? '所有项目', 'SCOPE / 范围\n\n只关注一个项目，或查看一天里跨项目的工作。'),
-        option('providers', '会话来源', sourceNames[options.source], 'SOURCES / 来源\n\n选择已安装并登录的 Codex、Claude Code，或同时使用两者。'),
+        option('providers', '会话来源', sourceNames[options.source], 'SOURCES / 来源\n\n选择 Codex、Claude Code、Copilot、Cursor，或同时读取全部来源。'),
         option('sources', '浏览会话原文', '查看来源、冻结证据和覆盖信息', 'EVIDENCE / 证据\n\n不生成摘要也能阅读已发现的对话。\n\n已整理的引用按冻结范围校验。'),
         option('help', '使用帮助', '按键、模型调用与数据位置', 'GUIDE / 使用帮助\n\n随时按 Esc 返回。\n\n所有操作都在当前终端内完成。'),
         option('updates', '版本与更新', `当前 v${version} · 更新说明与升级方法`, upgradeInstructions)
