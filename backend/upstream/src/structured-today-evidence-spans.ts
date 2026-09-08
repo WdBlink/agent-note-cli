@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { copilotMessageAuthorKind } from "./copilot-authority";
+import type { SessionUserAuthorKind } from "../app/desktop/session-authority";
 
-export const STRUCTURED_TODAY_EVIDENCE_PARSER_VERSION = "structured-today-evidence-parser/v2" as const;
+export const STRUCTURED_TODAY_EVIDENCE_PARSER_VERSION = "structured-today-evidence-parser/v3" as const;
 export const STRUCTURED_TODAY_ADMISSION_POLICY_VERSION = "structured-today-admission-policy/v1" as const;
 
 const NonEmptyString = z.string().trim().min(1);
@@ -358,7 +360,7 @@ export function parseEvidenceRecords(input: ParseEvidenceRecordsInputV1): Eviden
       });
       return;
     }
-    const projection = projectProviderMessage(provider, parsedRecord);
+    const projection = projectProviderMessage(provider, parsedRecord, defaultUserAuthorKind);
     if (!projection) return;
     if (isSyntheticOmission(projection.providerMessageId, projection.content)) {
       issues.push({
@@ -381,9 +383,12 @@ export function parseEvidenceRecords(input: ParseEvidenceRecordsInputV1): Eviden
       contentHash: sha256Bytes(recordBytes)
     };
     const normalizedMessageHash = sha256Text(projection.content);
+    const recordAuthorKind = authorKindsByRecordRange[`${sourceRecord.startByte}:${sourceRecord.endByte}`];
     const authorKind = projection.role === "assistant"
       ? "agent" as const
-      : authorKindsByRecordRange[`${sourceRecord.startByte}:${sourceRecord.endByte}`] ?? (provider === "copilot" ? projection.authorKind : defaultUserAuthorKind ?? projection.authorKind);
+      : provider === "copilot" && recordAuthorKind === "human"
+        ? projection.authorKind
+        : recordAuthorKind ?? (provider === "copilot" ? projection.authorKind : defaultUserAuthorKind ?? projection.authorKind);
     const messageKey = `msg-v2-${hashTuple("message-key/v2", [
       provider,
       sessionId,
@@ -563,7 +568,8 @@ function addEvidenceRelationIssues(
 
 function projectProviderMessage(
   provider: "codex" | "claude" | "copilot" | "cursor",
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
+  defaultUserAuthorKind?: SessionUserAuthorKind
 ): {
   role: "user" | "assistant";
   authorKind: z.infer<typeof EvidenceAuthorKindSchema>;
@@ -578,7 +584,7 @@ function projectProviderMessage(
     const content = projectText(data?.content);
     if (!content) return undefined;
     const providerMessageId = optionalString(record.id);
-    const authorKind = role === "assistant" || optionalString(record.agentId) || optionalString(data?.parentToolCallId) ? "agent" : data?.source === "user" ? "human" : "unknown";
+    const authorKind = copilotMessageAuthorKind(record, defaultUserAuthorKind);
     return { role, content, projectionKind: "primary", authorKind,
       ...(providerMessageId ? { providerMessageId } : {}) };
   }

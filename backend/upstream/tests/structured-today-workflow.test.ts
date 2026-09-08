@@ -4,10 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { TASKS } from "@langchain/langgraph-checkpoint";
+import { extractWorkSessionFromText } from "../src/agent-sessions";
+import { buildStructuredTodayIndexInput } from "../app/desktop/structured-today-input";
+import { appendStructuredTodayIndexRevision, createEmptyTraceinkAssetStore } from "../app/desktop/traceink-asset-store";
+import { projectStructuredTodayReview } from "../src/structured-today-review-state";
 import {
   EditorialContractBindingSchema,
   TodayWorklineIndexSchema,
   sha256Text,
+  canonicalContentHash,
   type DossierAnalysisCandidate,
   type DossierCandidate,
   type DossierCritiqueCandidate,
@@ -156,6 +161,69 @@ test("subagent-only evidence cannot create human or joint participation", async 
   assert.equal(participation.human, undefined);
   assert.equal(participation.joint, undefined);
   assert.match(participation.agent ?? "", /Agent/);
+});
+
+test("Copilot digests and worklines retain human participation only for host-classified human messages", async () => {
+  for (const [name, markers, human] of [
+    ["human", { data: { parentAgentTaskId: "task-1", delivery: "idle" } }, true],
+    ["agent-id", { agentId: "worker", data: {} }, false],
+    ["agent-source", { data: { source: "agent-worker" } }, false],
+    ["autopilot", { data: { source: "autopilot" } }, false],
+    ["continuation", { data: { isAutopilotContinuation: true } }, false],
+    ["skill", { data: { source: "skill-pdf" } }, false],
+    ["assistant-only", { data: {} }, false],
+    ["unknown", { data: { source: "unrecognized-source" } }, false]
+  ] as const) {
+    const content = [
+      { type: "session.start", timestamp: "2026-08-29T01:00:00Z", data: { sessionId: "copilot-1" } },
+      { type: "user.message", id: "u1", timestamp: "2026-08-29T01:01:00Z", ...markers, data: { ...markers.data, content: "input" } },
+      { type: "assistant.message", id: "a1", timestamp: "2026-08-29T01:02:00Z", data: { content: "answer" } }
+    ].filter(record => name !== "assistant-only" || record.type !== "user.message")
+      .map(record => JSON.stringify(record)).join("\n") + "\n";
+    const session = extractWorkSessionFromText(content, "/tmp/events.jsonl", "copilot", "2026-08-29T01:02:00Z");
+    assert.ok(session);
+    session.transcriptCapture = {
+      canonicalPath: session.path, byteLength: Buffer.byteLength(content), sha256: sha256Text(content),
+      coverage: { startByte: 0, endByte: Buffer.byteLength(content) }
+    };
+    const workflowInput = await buildStructuredTodayIndexInput({
+      logicalDate: "2026-08-29", workflowRunId: `copilot-${name}`, artifactId: "structured-today-index-2026-08-29", revision: 1,
+      editorialContract: editorialContract(),
+      snapshot: { date: "2026-08-29", generatedAt: session.updatedAt, sessions: [session], sources: [], warnings: [] },
+      readTranscript: async () => ({ content, truncated: false })
+    });
+    const fake = fakeModels({ inventHumanParticipation: true });
+    const synthesize = fake.models.synthesizeWorklineIndex;
+    fake.models.synthesizeWorklineIndex = async input => {
+      const digests = JSON.parse(input.sessionDigestsJson) as SessionDigestCandidate[];
+      assert.equal(digests.length, 1);
+      assert.equal(Boolean(digests[0]!.participation.human), human, `${name}: digest human`);
+      assert.equal(Boolean(digests[0]!.participation.joint), human, `${name}: digest joint`);
+      return synthesize(input);
+    };
+    const result = await invokeStructuredTodayLangGraphIndex({
+      graph: createStructuredTodayLangGraphIndex({ dependencies: { models: fake.models } }),
+      workflowInput, threadId: `copilot-${name}`, digestConcurrency: 1
+    });
+    assert.ok(!("interrupted" in result));
+    assert.equal(result.publishable, true);
+    assert.equal(fake.state.digestCalls, 1);
+    assert.equal(fake.state.synthesisCalls, 1);
+    const participation = result.artifact.worklines[0]?.participation;
+    assert.equal(participation?.status, "described");
+    assert.ok(participation?.status === "described");
+    assert.equal(Boolean(participation.human), human, `${name}: workline human`);
+    assert.equal(Boolean(participation.joint), human, `${name}: workline joint`);
+    assert.ok(participation.agent);
+    if (human) {
+      const current = appendStructuredTodayIndexRevision(createEmptyTraceinkAssetStore(), result.artifact, null);
+      assert.equal(projectStructuredTodayReview(current, "2026-08-29", [session]).mode, "compiled");
+      const { contentHash: _hash, ...hashable } = result.artifact;
+      const old = { ...hashable, provenance: { ...hashable.provenance, workflowVersion: "structured-today-workflow-v8-frozen-evidence" } };
+      const previous = appendStructuredTodayIndexRevision(createEmptyTraceinkAssetStore(), { ...old, contentHash: canonicalContentHash(old) }, null);
+      assert.equal(projectStructuredTodayReview(previous, "2026-08-29", [session]).mode, "stale");
+    }
+  }
 });
 
 test("LangGraph built-in SQLite checkpointer resumes without repeating completed Send nodes", async () => {

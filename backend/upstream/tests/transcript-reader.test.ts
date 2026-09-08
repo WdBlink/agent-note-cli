@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseSessionTranscript } from "../app/desktop/transcript-reader";
 import { parseEvidenceJsonl } from "../src/structured-today-evidence-spans";
+import { extractWorkSessionFromText } from "../src/agent-sessions";
+import { sessionUserAuthorKind } from "../app/desktop/session-authority";
+import { projectSessionActivityLane, summarizeDailySessionActivity } from "../src/session-activity";
 
 test("Copilot transcript and evidence readers preserve message content, roles, tool timing and parse warnings", () => {
   const content = [
@@ -15,14 +18,87 @@ test("Copilot transcript and evidence readers preserve message content, roles, t
     { type: "assistant.message_delta", data: { deltaContent: "hidden partial duplicate" } },
     { type: "assistant.message", id: "a1", data: { content: "已完成。" } }
   ].map(record => JSON.stringify(record)).join('\n') + '\n{"type":\n';
-  const transcript = parseSessionTranscript({ content, platform: "copilot", sessionId: "copilot-1", title: "Copilot", path: "/tmp/events.jsonl" });
-  assert.deepEqual(transcript.messages.map(m => [m.id, m.content, m.authorKind]), [["u1", "读取本地会话", "human"], ["u2", "来源未确认的提示", "unknown"], ["u3", "子 Agent 指令", "agent"], ["a1", "已完成。", "agent"]]);
+  const transcript = parseSessionTranscript({ content, platform: "copilot", sessionId: "copilot-1", title: "Copilot", path: "/tmp/events.jsonl", userAuthorKind: "human" });
+  assert.deepEqual(transcript.messages.map(m => [m.id, m.content, m.authorKind]), [["u1", "读取本地会话", "human"], ["u2", "来源未确认的提示", "human"], ["u3", "子 Agent 指令", "agent"], ["a1", "已完成。", "agent"]]);
   assert.equal(transcript.omittedToolEvents, 2);
   assert.equal(transcript.activityWindows?.length, 1);
   assert.match(transcript.warning ?? "", /1 行 JSON 无法解析/);
-  const evidence = parseEvidenceJsonl({ source: Buffer.from(content), provider: "copilot", sessionId: "copilot-1", evidenceId: "session:copilot:copilot-1", defaultUserAuthorKind: "unknown" });
+  const evidence = parseEvidenceJsonl({ source: Buffer.from(content), provider: "copilot", sessionId: "copilot-1", evidenceId: "session:copilot:copilot-1", defaultUserAuthorKind: "human" });
   assert.deepEqual(evidence.messages.map(m => [m.content, m.locator.authorKind]), transcript.messages.map(m => [m.content, m.authorKind]));
   assert.equal(evidence.issues.length, 1);
+});
+
+test("Copilot current-schema messages have identical authorship in transcript and evidence readers", () => {
+  const cases = [
+    { id: "plain", data: {}, expected: "human" },
+    { id: "telemetry", data: { delivery: "idle", parentAgentTaskId: "task-1" }, expected: "human" },
+    { id: "legacy-user", data: { source: "user" }, expected: "human" },
+    { id: "agent-id", agentId: "worker", data: { source: "user" }, expected: "agent" },
+    { id: "agent-source", data: { source: "agent-reviewer" }, expected: "agent" },
+    { id: "tool-parent", data: { parentToolCallId: "call-1" }, expected: "agent" },
+    { id: "autopilot", data: { source: "autopilot" }, expected: "automation" },
+    { id: "continuation", data: { isAutopilotContinuation: true }, expected: "automation" },
+    { id: "skill", data: { source: "skill-pdf" }, expected: "automation" },
+    { id: "agent-precedence", agentId: "worker", data: { source: "autopilot" }, expected: "agent" },
+    { id: "unknown-source", data: { source: "future-source" }, expected: "unknown" },
+    { id: "invalid-source", data: { source: 42 }, expected: "unknown" },
+    { id: "blank-agent", agentId: " ", data: {}, expected: "human" },
+    { id: "assistant", type: "assistant.message", data: { source: "autopilot" }, expected: "agent" }
+  ];
+  const content = cases.map(({ id, data, ...entry }) => JSON.stringify({
+    type: entry.type ?? "user.message", id, agentId: entry.agentId,
+    data: { ...data, content: id, transformedContent: "host instructions must not become content or authority" }
+  })).join("\n") + "\n";
+  for (const userAuthorKind of ["human", "unknown", "agent", "automation"] as const) {
+    const transcript = parseSessionTranscript({ content, platform: "copilot", sessionId: "copilot-1", title: "Copilot", path: "/tmp/events.jsonl", userAuthorKind });
+    const evidence = parseEvidenceJsonl({ source: Buffer.from(content), provider: "copilot", sessionId: "copilot-1", evidenceId: "session:copilot:copilot-1", defaultUserAuthorKind: userAuthorKind });
+    assert.deepEqual(transcript.messages.map(m => [m.id, m.content, m.authorKind]),
+      cases.map(c => [c.id, c.id, c.expected === "human" ? userAuthorKind : c.expected]));
+    assert.deepEqual(evidence.messages.map(m => [m.locator.providerMessageId, m.content, m.locator.authorKind]),
+      transcript.messages.map(m => [m.id, m.content, m.authorKind]));
+    const overridden = parseEvidenceJsonl({
+      source: Buffer.from(content), provider: "copilot", sessionId: "copilot-1",
+      evidenceId: "session:copilot:copilot-1", defaultUserAuthorKind: userAuthorKind,
+      authorKindsByRecordRange: Object.fromEntries(evidence.messages.map(m =>
+        [`${m.locator.rawRecord.start}:${m.locator.rawRecord.end}`, "human"]))
+    });
+    assert.deepEqual(overridden.messages.map(m => m.locator.authorKind), transcript.messages.map(m => m.authorKind));
+    const first = evidence.messages[0]!.locator.rawRecord;
+    const notification = parseEvidenceJsonl({
+      source: Buffer.from(content), provider: "copilot", sessionId: "copilot-1",
+      evidenceId: "session:copilot:copilot-1", defaultUserAuthorKind: userAuthorKind,
+      authorKindsByRecordRange: { [`${first.start}:${first.end}`]: "host-notification" }
+    });
+    assert.equal(notification.messages[0]!.locator.authorKind, "host-notification");
+    const oldParser = parseEvidenceJsonl({
+      source: Buffer.from(content), provider: "copilot", sessionId: "copilot-1",
+      evidenceId: "session:copilot:copilot-1", defaultUserAuthorKind: userAuthorKind,
+      parserVersion: "structured-today-evidence-parser/v2"
+    });
+    assert.notEqual(evidence.messages[0]!.locator.messageKey, oldParser.messages[0]!.locator.messageKey);
+  }
+});
+
+test("Copilot session.start grants primary lineage and exactly one real intervention", () => {
+  const content = [
+    { type: "session.start", timestamp: "2026-09-07T01:00:00Z", data: { sessionId: "copilot-1", context: { cwd: "/tmp/project" } } },
+    { type: "user.message", id: "u1", timestamp: "2026-09-07T01:01:00Z", data: { content: "human input", delivery: "idle", parentAgentTaskId: "task-1" } },
+    { type: "assistant.message", id: "a1", timestamp: "2026-09-07T01:02:00Z", data: { content: "answer" } },
+    { type: "user.message", id: "u2", timestamp: "2026-09-07T01:03:00Z", agentId: "worker", data: { content: "agent input" } },
+    { type: "user.message", id: "u3", timestamp: "2026-09-07T01:04:00Z", data: { content: "continue", source: "autopilot" } }
+  ].map(record => JSON.stringify(record)).join("\n") + "\n";
+  const session = extractWorkSessionFromText(content, "/tmp/events.jsonl", "copilot", "2026-09-07T01:04:00Z");
+  assert.ok(session);
+  assert.deepEqual(session.lineage, { origin: "primary" });
+  const transcript = parseSessionTranscript({ content, platform: "copilot", sessionId: session.id, title: session.title, path: session.path, userAuthorKind: sessionUserAuthorKind(session) });
+  assert.deepEqual(transcript.messages.map(m => m.authorKind), ["human", "agent", "agent", "automation"]);
+  const lane = projectSessionActivityLane({ logicalDate: "2026-09-07", timeZone: "UTC", source: { session, transcript } });
+  assert.deepEqual(lane.userInterventions, [{ id: "u1", timestamp: "2026-09-07T01:01:00Z" }]);
+  assert.equal(summarizeDailySessionActivity({ logicalDate: "2026-09-07", lanes: [lane] }).facts.userInterventionCount, 1);
+  for (const sessionId of [undefined, "", " ", 42]) {
+    const unverified = extractWorkSessionFromText(JSON.stringify({ type: "session.start", data: { sessionId } }), "/tmp/events.jsonl", "copilot", session.updatedAt);
+    assert.equal(unverified?.lineage?.origin, "unknown");
+  }
 });
 
 test("an incomplete Codex record does not hide valid event-only messages", () => {

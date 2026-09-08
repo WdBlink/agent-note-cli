@@ -20,7 +20,7 @@ test('Copilot supports CLI filtering, frozen source replay and the existing brie
   const file = path.join(sessionDir, 'events.jsonl');
   const content = [
     { type: 'session.start', timestamp: '2026-08-29T01:00:00Z', data: { sessionId: 'session-1', context: { cwd: f.dir } } },
-    { type: 'user.message', id: 'user-1', timestamp: '2026-08-29T01:01:00Z', data: { content: '读取 Copilot 来源。', source: 'user' } },
+    { type: 'user.message', id: 'user-1', timestamp: '2026-08-29T01:01:00Z', data: { content: '读取 Copilot 来源。', delivery: 'idle', parentAgentTaskId: 'task-1' } },
     { type: 'assistant.message', id: 'assistant-1', timestamp: '2026-08-29T01:10:00Z', data: { content: '保留完整证据。' } }
   ].map(JSON.stringify).join('\n') + '\n';
   await fs.writeFile(file, content);
@@ -31,8 +31,10 @@ test('Copilot supports CLI filtering, frozen source replay and the existing brie
   const raw = JSON.parse(output);
   assert.deepEqual(raw.sessions.map(s => s.platform), ['copilot']);
   assert.equal(raw.sessions[0].title, '读取 Copilot 来源。');
+  assert.equal(raw.sessions[0].lineage.origin, 'primary');
   const transcript = await readSource(raw, `copilot:session-1:${raw.sessions[0].path}`);
   assert.deepEqual(transcript.messages.map(m => m.content), ['读取 Copilot 来源。', '保留完整证据。']);
+  assert.deepEqual(transcript.messages.map(m => m.authorKind), ['human', 'agent']);
   const delegate = structuredRunner();
   const requests = [];
   const runner = async request => {
@@ -44,6 +46,7 @@ test('Copilot supports CLI filtering, frozen source replay and the existing brie
   const view = await brief(options, { runner });
   assert.equal(view.mode, 'compiled');
   assert.equal(view.index.sessions[0].provider, 'copilot');
+  assert.equal(view.index.worklines[0].participation.human, '确定产品方向。');
   assert.ok(requests[0].stdin.includes('读取 Copilot 来源。'));
   assert.ok(requests.every(r => r.command !== 'copilot'), 'Copilot is a source, not a new model runner');
   const dossier = await brief({ ...options, workline: '1' }, { runner });

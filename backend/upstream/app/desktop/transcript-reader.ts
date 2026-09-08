@@ -1,4 +1,6 @@
 import { parseCursorTimestamp } from "../../src/agent-sessions";
+import { copilotMessageAuthorKind } from "../../src/copilot-authority";
+import type { SessionUserAuthorKind } from "./session-authority";
 import type { AgentPlatform } from "../../src/types";
 import type {
   SessionTranscriptActivityWindow,
@@ -24,7 +26,7 @@ export function parseSessionTranscript(input: {
   const userAuthorKind = input.userAuthorKind ?? "unknown";
   const primary = input.platform === "codex"
     ? parseCodexMessages(records, userAuthorKind)
-    : input.platform === "copilot" ? parseCopilotMessages(records)
+    : input.platform === "copilot" ? parseCopilotMessages(records, userAuthorKind)
     : parseRoleTranscriptMessages(records, userAuthorKind, input.platform === "cursor" ? "cursor" : "claude");
   const limited = limitMessages(deduplicateMessages(primary.messages));
   const contentTruncated = limited.truncated;
@@ -150,7 +152,10 @@ function parseRoleTranscriptMessages(
   return { messages, activityWindows: deduplicateActivityWindows(activityWindows), omittedToolEvents };
 }
 
-function parseCopilotMessages(records: Record<string, unknown>[]): {
+function parseCopilotMessages(
+  records: Record<string, unknown>[],
+  userAuthorKind: SessionUserAuthorKind
+): {
   messages: SessionTranscriptMessage[];
   activityWindows: SessionTranscriptActivityWindow[];
   omittedToolEvents: number;
@@ -165,8 +170,7 @@ function parseCopilotMessages(records: Record<string, unknown>[]): {
     if (record.type === "user.message" || record.type === "assistant.message") {
       const role = record.type === "user.message" ? "user" : "assistant";
       const content = extractContent(data?.content);
-      // Copilot marks actual user input explicitly; transformedContent may contain host instructions.
-      const userKind = cleanText(record.agentId) || cleanText(data?.parentToolCallId) ? "agent" : data?.source === "user" ? "human" : "unknown";
+      const userKind = copilotMessageAuthorKind(record, userAuthorKind);
       if (content) messages.push(message(record.id, index, role, content, timestamp, userKind));
     }
     if (record.type === "tool.execution_start" || record.type === "tool.execution_complete") {
