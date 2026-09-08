@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseSessionTranscript } from "../app/desktop/transcript-reader";
@@ -111,4 +112,23 @@ test("individual message truncation is visible even below the total character li
   assert.equal(transcript.truncated, true);
   assert.ok(transcript.warning);
   assert.ok(transcript.messages[0]!.content.length < 81000);
+});
+
+
+test("Cursor timestamp offsets survive scanning and reading outside the source timezone", () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    import { extractWorkSessionFromText } from './src/agent-sessions.ts';
+    import { parseSessionTranscript } from './app/desktop/transcript-reader.ts';
+    const content = JSON.stringify({role: 'user', message: {content: '<timestamp>Monday, Sep 7, 2026, 11:38 AM (UTC+8)</timestamp> inspect'}});
+    const session = extractWorkSessionFromText(content, '/tmp/cursor/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl', 'cursor', '2026-09-07T04:00:00Z');
+    const transcript = parseSessionTranscript({content, platform: 'cursor', sessionId: 'cursor-1', title: 'Cursor', path: '/tmp/cursor.jsonl'});
+    assert.equal(session.startedAt, '2026-09-07T03:38:00.000Z');
+    assert.equal(transcript.messages[0].timestamp, session.startedAt);
+  `;
+  for (const TZ of ["UTC", "America/Los_Angeles"]) {
+    execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      cwd: new URL("..", import.meta.url), env: { ...process.env, TZ }, stdio: "pipe"
+    });
+  }
 });

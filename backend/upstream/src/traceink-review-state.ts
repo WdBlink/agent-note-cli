@@ -210,7 +210,7 @@ function currentSessionManifest(sessions: AgentWorkSession[]): CurrentSessionMan
 
   for (const session of sessions) {
     const capture = session.transcriptCapture;
-    const provider = session.platform === "codex" || session.platform === "claude"
+    const provider = session.platform === "codex" || session.platform === "claude" || session.platform === "cursor"
       ? session.platform
       : undefined;
     const canonicalPath = capture?.canonicalPath || session.path;

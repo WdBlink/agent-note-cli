@@ -54,9 +54,13 @@ env -u NO_COLOR agent-note ui
 
 ## 来源与模型
 
-`--source all|codex|claude|copilot` 控制启用的会话来源，默认读取三种来源。Copilot CLI 历史来自 `~/.copilot/session-state/*/events.jsonl`；它是输入来源，生成仍使用配置的 Codex / Claude 模型。只想读取一种来源时请显式选择。
+以下 Cursor 参数在主分支开发版提供；已发布的 v0.6.0 尚不包含这些参数。
 
-首次安装后先运行 `codex --version` 或 `claude --version`，并在对应 CLI 完成登录。Agent Note 不复制登录凭据。已有会话但模型 CLI 未安装时，生成会失败；已有 brief 仍可用 `--read-only` 阅读。
+`--source all|codex|claude|copilot|cursor` 控制启用的会话来源，默认读取四种来源。Copilot CLI 历史来自 `~/.copilot/session-state/*/events.jsonl`；它是输入来源，生成使用已配置的模型 CLI，可用 `--compiler` 指定。只想读取一种来源时请显式选择。
+
+Cursor 读取 `~/.cursor/projects/*/agent-transcripts/` 下的 JSONL 主会话和子 Agent；默认使用 Cursor Agent CLI（`agent`）整理。
+
+首次安装后先运行 `codex --version`、`claude --version` 或 `agent --version`，并在对应 CLI 完成登录（Cursor 为 `agent login`，也可用 `CURSOR_API_KEY`）。Agent Note 不复制登录凭据。已有会话但模型 CLI 未安装时，生成会失败；已有 brief 仍可用 `--read-only` 阅读。
 
 `--settings FILE` 读取 App 格式的 settings 对象，或包含 `settings` 字段的 JSON。示例（目录与 CLI 路径按自己机器修改）：
 
@@ -65,7 +69,8 @@ env -u NO_COLOR agent-note ui
   "sessionScanRoots": ["~/.codex/sessions", "~/.codex/archived_sessions"],
   "enabledSessionProviders": ["codex"],
   "codexCliPath": "codex",
-  "claudeCliPath": "claude"
+  "claudeCliPath": "claude",
+  "cursorCliPath": "agent"
 }
 ```
 
@@ -78,9 +83,51 @@ agent-note brief --settings ./settings.json
 ```sh
 agent-note brief --source codex --codex-model YOUR_MODEL --refresh
 agent-note brief --source claude --claude-model YOUR_MODEL --refresh
+agent-note brief --source cursor --cursor-model YOUR_MODEL --refresh
 ```
 
-两个选项分别映射到原有的 `AGENT_NOTEBOOK_TODAY_CODEX_MODEL` 与 `AGENT_NOTEBOOK_TODAY_CLAUDE_MODEL` 环境变量。未加 `--refresh` 时，已有未变化的结果仍直接重开。
+这些选项分别映射到原有的 `AGENT_NOTEBOOK_TODAY_CODEX_MODEL`、`AGENT_NOTEBOOK_TODAY_CLAUDE_MODEL` 与 `AGENT_NOTEBOOK_TODAY_CURSOR_MODEL` 环境变量。未加 `--refresh` 时，已有未变化的结果仍直接重开。
+
+Codex 与 Claude 有固定的默认模型；Cursor 不传 `--model`，直接用账号的默认模型，因为可用模型随账号和 CLI 版本变化。要指定就用 `--cursor-model`，名字先用 `agent --list-models` 确认。
+
+### 读取来源与整理器分开
+
+`--source` 决定读哪些会话，`--compiler codex|claude|cursor` 决定用哪个模型 CLI 整理，默认跟随来源。两者拆开是因为「本机有某个工具的会话记录」和「本机能调用它的 CLI」是两回事：CLI 可能没装，也可能因为企业受管账号无法登录。
+
+```sh
+# 读 Cursor 会话，但用已登录的 Claude Code 整理
+agent-note brief --source cursor --compiler claude
+```
+
+读取来源不需要任何登录，只读本机文件；只有整理、刷新和深读才会调用 `--compiler` 指定的 CLI。数据目录按来源划分，换 `--compiler` 不会另开一份数据范围，需要用新整理器重算时加 `--refresh`。
+
+### Cursor 的能力差异
+
+Cursor Agent CLI 没有 Codex 与 Claude Code 用来隔离整理调用的那几个参数，接入时按下面的实际行为理解：
+
+| 能力 | Codex | Claude Code | Cursor |
+| --- | --- | --- | --- |
+| 输出 schema 由 CLI 强制 | `--output-schema` | `--json-schema` | 无，schema 写在 prompt 里 |
+| 不落会话记录 | `--ephemeral` | `--no-session-persistence` | 无对应参数 |
+| 忽略用户级配置 | `--ignore-user-config` | — | 无对应参数 |
+| 只读约束 | `--sandbox read-only` | `--safe-mode --tools Read` | `--mode ask --sandbox enabled` |
+
+由此带来三点实际影响。
+
+一是 schema 写在 prompt 里；本地仍校验结构与证据归属。解析器可去掉完整 JSON 外的 Markdown 或尾随文字，但不会改写会话和证据 ID；错误标识会触发校验失败。
+
+二是每次整理调用都会在 `~/.cursor/projects/` 下留一个以临时工作目录命名的 chat（形如 `...-structured-today-call-XXXXXX`），Cursor 没有 `--ephemeral` 之类的参数可以关掉。扫描已排除这些目录，它们不会变成证据、也不占用发现预算，但会占磁盘。需要清理时删掉这些目录即可，其中可能包含用于整理的工作证据，清理前应确认具体目录：
+
+```sh
+ls -d ~/.cursor/projects/*structured-today-call*   # 先看
+
+```
+
+三是 `~/.cursor/mcp.json` 中配置的 MCP server 会一起加载进整理调用，会话证据可能因此流向第三方服务。介意这点时，用 `--compiler codex` 或 `--compiler claude` 整理同一批 Cursor 会话。
+
+另有一点与整理器无关，只要读 Cursor 会话就会遇到：会话仍活跃时原文可能被改写，Cursor 的 JSONL 也不保证只追加。证据是按字节冻结并逐字节校验的，所以深读一条原文已被改写的工作线会失败，并提示先 `--refresh`。深读活跃会话时，紧接着生成之后做最稳妥。
+
+Cursor Agent CLI 的登录独立于 Cursor 编辑器：装好后仍需单独 `agent login`（或设 `CURSOR_API_KEY`）。企业受管账号是否允许 CLI 与 API key 由管理员配置，可能无法登录；这种情况下 `--source cursor` 照常读取会话，整理改用 `--compiler`。用 `agent status` 确认当前登录状态，用 `agent --list-models` 确认可用模型名再决定 `--cursor-model`。
 
 ## 自定义范围
 
@@ -91,7 +138,7 @@ agent-note brief --root ~/exports/codex --root ~/exports/claude
 agent-note brief --project ~/Code/my-project --data-dir ~/agent-note-data
 ```
 
-`--root` 可重复。原后端依赖目录名中的 `codex`、`claude` 或 `copilot` 识别来源；无该标识的目录会被拒绝。Copilot 自定义根目录应指向包含各会话子目录的 `session-state`。命令行不根据 `CODEX_HOME`、`CLAUDE_CONFIG_DIR` 自动改写 App 默认扫描目录，请用 `--root` 或 settings 明确设置。
+`--root` 可重复。原后端依赖目录名中的 `codex`、`claude`、`copilot` 或 `cursor` 识别来源；无该标识的目录会被拒绝。Copilot 自定义根目录应指向包含各会话子目录的 `session-state`。命令行不根据 `CODEX_HOME`、`CLAUDE_CONFIG_DIR` 自动改写 App 默认扫描目录，请用 `--root` 或 settings 明确设置。
 
 日期依据所选时区，默认系统时区。项目筛选保留匹配主会话的完整 Agent 家族，即使子 Agent 在另一个目录执行。不同来源、项目和时区使用独立数据范围。工作线编号属于当前范围当前版本；脚本可使用 JSON 中的 `worklineId`。
 
@@ -122,6 +169,8 @@ JSON 外层为 `agent-note-cli/view/v1`：
 
 原始会话只读。生成、刷新或首次深读会把原后端选择的证据通过你的模型 CLI 发给对应 provider；证据可能含代码、文件路径、用户反思或秘密，当前版本不自动脱敏。provider 的认证、配额和数据政策仍适用。
 
+选择 Cursor 整理时，Cursor 可能加载 `~/.cursor/mcp.json` 中已配置的 MCP server：Cursor Agent CLI 没有忽略用户级配置的参数，Agent Note 无法在调用时关掉它们。
+
 CLI 继承与 App 相同的模型进程环境和依赖；例如用户已设置的 `LANGCHAIN_TRACING_V2` / `LANGSMITH_TRACING` 可能启用第三方 tracing。需要严格本地阅读时使用 `--read-only`，并自行检查宿主机的 provider/依赖环境配置。Agent Note 没有自己的遥测服务。
 
 `--read-only` 保证不调用模型；为读取并管理缓存，仍可能创建本地数据目录、空资产存储和短暂锁目录。它不是“整个文件系统零写入”模式。
@@ -130,7 +179,9 @@ CLI 继承与 App 相同的模型进程环境和依赖；例如用户已设置�
 
 **找不到会话**：确认日期和时区、来源是否正确，自定义目录是否包含 provider 标识。未生成的 raw 状态与模型失败是两种不同情况。
 
-**模型报错或不识别参数**：升级对应 CLI，检查登录状态与模型可用性。App 的结构化输出、临时会话和隔离参数需要 provider CLI 支持。可在 settings 中填写 CLI 绝对路径。
+**模型报错或不识别参数**：升级对应 CLI，检查登录状态与模型可用性。App 的结构化输出、临时会话和隔离参数需要 provider CLI 支持；Cursor 缺少其中几项，见上面的能力差异表。可在 settings 中填写 CLI 绝对路径。
+
+**Cursor 整理反复失败**：多半是返回值不满足 schema。Cursor 没有 CLI 层的结构化输出约束，换一个更强的模型（`--cursor-model`）通常比重试有效；也可以改用 `--compiler codex` 或 `--compiler claude` 整理同一批会话。
 
 **切换了模型但结果没变**：用 `--refresh` 生成新版本。
 

@@ -18,7 +18,7 @@ export interface TraceinkReviewScopeV1 {
 }
 
 export interface TraceinkProducerRefV1 {
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "cursor";
   model: string;
   reasoningConfiguration?: string;
   startedAt: string;
@@ -30,7 +30,7 @@ export interface TraceinkProducerRefV1 {
 export interface TraceinkEvidenceRefV1 {
   id: string;
   kind: "session" | "document" | "code" | "test" | "experiment" | "artifact";
-  provider?: "codex" | "claude";
+  provider?: "codex" | "claude" | "cursor";
   sessionId?: string;
   path: string;
   locator: string;
@@ -421,7 +421,7 @@ export function isTraceinkLogicalDate(value: unknown): value is string {
 function normalizeProducer(value: unknown, logicalDate?: string): TraceinkProducerRefV1 | undefined {
   const raw = asRecord(value);
   if (!raw) return undefined;
-  const provider = raw.provider === "codex" || raw.provider === "claude" ? raw.provider : undefined;
+  const provider = raw.provider === "codex" || raw.provider === "claude" || raw.provider === "cursor" ? raw.provider : undefined;
   const model = nonEmptyString(raw.model);
   const reasoningConfiguration = raw.reasoningConfiguration === undefined
     ? undefined
@@ -533,7 +533,7 @@ function normalizeEvidence(value: unknown): SidecarNormalization<TraceinkEvidenc
     const locator = nonEmptyString(raw?.locator);
     const provider = raw?.provider === undefined
       ? undefined
-      : raw.provider === "codex" || raw.provider === "claude" ? raw.provider : undefined;
+      : raw.provider === "codex" || raw.provider === "claude" || raw.provider === "cursor" ? raw.provider : undefined;
     const sessionId = raw?.sessionId === undefined ? undefined : nonEmptyString(raw.sessionId);
     const contentHash = raw?.contentHash === undefined ? undefined : sha256(raw.contentHash);
     if (

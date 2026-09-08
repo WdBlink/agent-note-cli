@@ -541,6 +541,7 @@ export function normalizeSettings(input: unknown): CockpitSettings {
     runtimeNodePath: cleanCommand(settings.runtimeNodePath, DEFAULT_SETTINGS.runtimeNodePath),
     codexCliPath: cleanCommand(settings.codexCliPath, DEFAULT_SETTINGS.codexCliPath),
     claudeCliPath: cleanCommand(settings.claudeCliPath, DEFAULT_SETTINGS.claudeCliPath),
+    cursorCliPath: cleanCommand(settings.cursorCliPath, DEFAULT_SETTINGS.cursorCliPath),
     dailyReviewScheduleEnabled: settings.dailyReviewScheduleEnabled === true,
     dailyReviewScheduleTime: normalizeDailyReviewScheduleTime(settings.dailyReviewScheduleTime)
   };
@@ -924,19 +925,19 @@ function cleanText(value: unknown, fallback: string): string {
 }
 
 function normalizePlatform(value: unknown): AgentPlatform {
-  return value === "codex" || value === "claude" || value === "copilot" || value === "minimax" || value === "other" ? value : "other";
+  return value === "codex" || value === "claude" || value === "copilot" || value === "cursor" || value === "minimax" || value === "other" ? value : "other";
 }
 
 function normalizeSessionStatus(value: unknown): AgentSessionStatus {
   return value === "active" || value === "blocked" || value === "completed" || value === "unknown" ? value : "unknown";
 }
 
-function normalizeSummarySource(value: unknown): "codex" | "claude" | "metadata" {
-  return value === "codex" || value === "claude" || value === "metadata" ? value : "metadata";
+function normalizeSummarySource(value: unknown): "codex" | "claude" | "cursor" | "metadata" {
+  return value === "codex" || value === "claude" || value === "cursor" || value === "metadata" ? value : "metadata";
 }
 
 function isTrustedStoredSessionPath(path: string, platform: unknown): boolean {
-  if (platform !== "codex" && platform !== "claude" && platform !== "copilot") return false;
+  if (platform !== "codex" && platform !== "claude" && platform !== "copilot" && platform !== "cursor") return false;
   const normalized = path.replace(/\\/g, "/").toLowerCase();
   if (normalized.includes("/.claude/tasks/") || normalized.includes("/.codex/memories/")) return false;
   return platform === "copilot" ? /\/events\.jsonl$/i.test(normalized) : /\.jsonl$/i.test(normalized);

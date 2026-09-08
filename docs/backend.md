@@ -29,7 +29,7 @@ node scripts/sync-backend.mjs /path/to/agent-notebook --check
 
 JSON 中的 `index` 保留原始 `today-workline-index/v1` 产物，包括工作线、Session membership、参与情况、证据、覆盖情况与 provenance；`dossier` 保留原始深读产物。没有把完整后端结果改成几个字符串的简化摘要。V1 来源精度仍以 App 的会话级证据为准，不冒充消息级引用。
 
-CLI 当前开放 Today 的工作脉络与按需深读。Wiki 编辑、反思写入、提案采纳和封页没有命令入口；它们不是用另一套简化逻辑替代实现。
+CLI 当前开放 Today 的工作脉络与按需深读，会话来源包括 Codex、Claude Code、Copilot 和 Cursor。`--compiler` 可以独立选择 Codex、Claude Code 或 Cursor Agent CLI。Wiki 编辑、反思写入、提案采纳和封页没有命令入口；它们不是用另一套简化逻辑替代实现。
 
 交互界面在 `src/interactive.mjs` 组织页面流程，`src/terminal.mjs` 负责键盘、终端单元宽度、分页和生命周期。两者使用 Node 标准库，不增加运行时 UI 框架。原文阅读仍调用共享的冻结范围阅读器与 transcript parser。React 与图标包仅是同步后端引用测试的开发依赖，不进入发布包。
 

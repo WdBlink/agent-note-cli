@@ -48,7 +48,7 @@ export async function buildStructuredTodayIndexInput(
   const editorialContract = EditorialContractBindingSchema.parse(options.editorialContract);
   const readTranscript = options.readTranscript ?? readBoundedTranscriptSource;
   const supported = options.snapshot.sessions.filter(isSupportedSession);
-  if (supported.length === 0) throw new Error("今天没有可进入结构化工作脉络的 Codex 或 Claude Session。");
+  if (supported.length === 0) throw new Error("今天没有可进入结构化工作脉络的 Codex、Claude 或 Cursor Session。");
   const families = structuredTodaySessionFamilies(supported);
   if (families.length === 0) throw new Error("今天只发现了无法归属到主会话的子 Agent 记录；请刷新 Session 家族后重试。");
   const sessions = await mapWithConcurrency(families, 3, async (family) => {
@@ -228,7 +228,7 @@ export async function buildStructuredTodayIndexInputV2(
   const editorialContract = EditorialContractBindingSchema.parse(options.editorialContract);
   const buildProvenance = options.buildProvenanceSession ?? buildStructuredTodayProvenanceSession;
   const supported = structuredTodaySessionFamilies(options.snapshot.sessions.filter(isSupportedSession)).map((family) => family.root);
-  if (supported.length === 0) throw new Error("今天没有可进入结构化工作脉络的 Codex 或 Claude Session。");
+  if (supported.length === 0) throw new Error("今天没有可进入结构化工作脉络的 Codex、Claude 或 Cursor Session。");
   const sessions = await mapWithConcurrency(supported, 3, async (session) => {
     const capture = session.transcriptCapture;
     const sourcePath = capture?.canonicalPath ?? session.path;
@@ -368,8 +368,8 @@ export function boundedEvidenceJson<T extends {
 }
 
 export interface StructuredTodaySessionFamily {
-  root: AgentWorkSession & { platform: "codex" | "claude" | "copilot" };
-  members: Array<AgentWorkSession & { platform: "codex" | "claude" | "copilot" }>;
+  root: AgentWorkSession & { platform: "codex" | "claude" | "copilot" | "cursor" };
+  members: Array<AgentWorkSession & { platform: "codex" | "claude" | "copilot" | "cursor" }>;
 }
 
 export function structuredTodaySessionFamilies(
@@ -419,8 +419,8 @@ function sessionMetadata(session: AgentWorkSession) {
 
 function isSupportedSession(
   session: AgentWorkSession
-): session is AgentWorkSession & { platform: "codex" | "claude" | "copilot" } {
-  return session.platform === "codex" || session.platform === "claude" || session.platform === "copilot";
+): session is AgentWorkSession & { platform: "codex" | "claude" | "copilot" | "cursor" } {
+  return session.platform === "codex" || session.platform === "claude" || session.platform === "copilot" || session.platform === "cursor";
 }
 
 async function mapWithConcurrency<T, R>(
@@ -445,8 +445,8 @@ function validTimestamp(value: string | undefined): string | undefined {
   return value && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : undefined;
 }
 
-function providerLabel(provider: "codex" | "claude" | "copilot"): string {
-  return provider === "codex" ? "Codex" : provider === "copilot" ? "GitHub Copilot" : "Claude Code";
+function providerLabel(provider: "codex" | "claude" | "copilot" | "cursor"): string {
+  return provider === "codex" ? "Codex" : provider === "copilot" ? "GitHub Copilot" : provider === "cursor" ? "Cursor" : "Claude Code";
 }
 
 function boundedError(error: unknown): string {

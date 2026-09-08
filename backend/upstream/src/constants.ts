@@ -14,7 +14,8 @@ export const DEFAULT_SESSION_SCAN_ROOTS = [
   "~/.codex/sessions",
   "~/.codex/archived_sessions",
   "~/.claude/projects",
-  "~/.copilot/session-state"
+  "~/.copilot/session-state",
+  "~/.cursor/projects"
 ];
 
 export const SESSION_PROVIDER_DEFINITIONS: ReadonlyArray<{
@@ -24,7 +25,8 @@ export const SESSION_PROVIDER_DEFINITIONS: ReadonlyArray<{
 }> = [
   { id: "codex", label: "Codex", description: "读取 ~/.codex 下的本机会话记录" },
   { id: "claude", label: "Claude Code", description: "读取 ~/.claude/projects 下的本机会话记录" },
-  { id: "copilot", label: "GitHub Copilot", description: "读取 ~/.copilot/session-state 下的 CLI 会话记录" }
+  { id: "copilot", label: "GitHub Copilot", description: "读取 ~/.copilot/session-state 下的 CLI 会话记录" },
+  { id: "cursor", label: "Cursor", description: "读取 ~/.cursor/projects 下的本机 Agent transcript，并用 Cursor Agent CLI 整理" }
 ];
 
 export const DEFAULT_SESSION_PROVIDERS: SessionProvider[] = SESSION_PROVIDER_DEFINITIONS.map(({ id }) => id);
@@ -51,6 +53,7 @@ export const DEFAULT_SETTINGS: CockpitSettings = {
   runtimeNodePath: "node",
   codexCliPath: "codex",
   claudeCliPath: "claude",
+  cursorCliPath: "agent",
   dailyReviewScheduleEnabled: false,
   dailyReviewScheduleTime: "18:30"
 };

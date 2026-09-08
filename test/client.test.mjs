@@ -150,3 +150,177 @@ test('timezone scopes cannot reuse a different local day boundary', async t => {
   const invoke = zone => JSON.parse(execFileSync(process.execPath, ['src/cli.mjs', 'brief', '--date', date, '--root', f.root, '--source', 'codex', '--data-dir', f.options.dataDir, '--read-only', '--timezone', zone, '--format', 'json'], { encoding: 'utf8', stdio: 'pipe' }));
   assert.notEqual(invoke('UTC').dataDir, invoke('Asia/Shanghai').dataDir);
 });
+
+test('CLI reads Cursor transcripts as a first-class source', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-note-cursor-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const sessionId = '2c0aa10b-d54b-461b-b06c-2a09f67d3192';
+  const root = path.join(dir, 'cursor', 'projects', 'demo');
+  const transcript = path.join(root, 'agent-transcripts', sessionId, `${sessionId}.jsonl`);
+  await fs.mkdir(path.dirname(transcript), { recursive: true });
+  await fs.writeFile(transcript, [
+    { role: 'user', message: { content: [{ type: 'text', text: '<timestamp>Saturday, Aug 29, 2026, 9:00 AM (UTC+8)</timestamp>\n<user_query>\n把 Cursor 接进 brief\n</user_query>' }] } },
+    { role: 'assistant', message: { content: [{ type: 'text', text: '已把 Cursor transcript 当作会话来源。' }] } }
+  ].map(JSON.stringify).join('\n'));
+  await fs.utimes(transcript, new Date('2026-08-29T02:00:00Z'), new Date('2026-08-29T02:00:00Z'));
+  const output = execFileSync(process.execPath, ['src/cli.mjs', 'brief', '--date', date, '--root', root, '--source', 'cursor', '--data-dir', path.join(dir, 'data'), '--read-only', '--format', 'json'], { encoding: 'utf8', stdio: 'pipe' });
+  const view = JSON.parse(output);
+  assert.equal(view.sessions[0].platform, 'cursor');
+  assert.equal(view.sessions[0].id, sessionId);
+  assert.equal(view.sessions[0].title, '把 Cursor 接进 brief');
+  assert.equal(view.index, null);
+});
+
+async function cursorFixture(t, label) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `agent-note-${label}-`));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const sessionId = '2c0aa10b-d54b-461b-b06c-2a09f67d3192';
+  const root = path.join(dir, 'cursor', 'projects', 'demo');
+  const transcript = path.join(root, 'agent-transcripts', sessionId, `${sessionId}.jsonl`);
+  await fs.mkdir(path.dirname(transcript), { recursive: true });
+  await fs.writeFile(transcript, [
+    { role: 'user', message: { content: [{ type: 'text', text: '<timestamp>Saturday, Aug 29, 2026, 9:00 AM (UTC+8)</timestamp>\n<user_query>\n把 Cursor 接进 brief\n</user_query>' }] } },
+    { role: 'assistant', message: { content: [{ type: 'text', text: '已把 Cursor transcript 当作会话来源。' }] } }
+  ].map(JSON.stringify).join('\n'));
+  await fs.utimes(transcript, new Date('2026-08-29T02:00:00Z'), new Date('2026-08-29T02:00:00Z'));
+  return { dir, root, sessionId, dataDir: path.join(dir, 'data') };
+}
+
+test('CLI compiles Cursor-only briefs with Cursor Agent CLI', async t => {
+  const { root, sessionId, dataDir } = await cursorFixture(t, 'cursor-compile');
+  const calls = [];
+  const view = await brief({
+    date,
+    roots: [root],
+    source: 'cursor',
+    dataDir
+  }, { runner: jsonEnvelopeRunner(calls) });
+  assert.equal(view.mode, 'compiled');
+  assert.equal(view.index.schema, 'today-workline-index/v1');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].command, 'agent');
+  assert.deepEqual(calls[0].args.slice(0, 8), ['--print', '--output-format', 'json', '--mode', 'ask', '--trust', '--sandbox', 'enabled']);
+  assert.equal(calls[0].stdoutMode, 'single-json');
+  assert.match(calls[0].stdin, /Return one JSON object satisfying this JSON Schema/);
+  assert.doesNotMatch(calls[0].stdin, /output\.schema\.json/);
+  assert.ok(calls[0].stdin.includes('Digest exactly one'));
+  assert.ok(calls[1].stdin.includes('Reconstruct cross-Session'));
+  assert.equal(view.index.sessions[0].sessionId, sessionId);
+});
+
+test('--compiler reads one source but compiles with another provider CLI', async t => {
+  const { root, dataDir } = await cursorFixture(t, 'cursor-compiler-override');
+  const calls = [];
+  const view = await brief({
+    date,
+    roots: [root],
+    source: 'cursor',
+    compiler: 'claude',
+    dataDir
+  }, { runner: jsonEnvelopeRunner(calls) });
+  assert.equal(view.mode, 'compiled');
+  assert.equal(view.sessions[0].platform, 'cursor', 'the scan still reads Cursor transcripts');
+  assert.equal(calls[0].command, 'claude');
+  assert.ok(calls[0].args.includes('--json-schema'), 'Claude Code enforces the schema over its own flag');
+  assert.doesNotMatch(calls[0].stdin, /Return one JSON object satisfying this JSON Schema/);
+});
+
+test('--compiler rejects a provider outside the supported set', async t => {
+  const { root, dataDir } = await cursorFixture(t, 'cursor-compiler-invalid');
+  await assert.rejects(
+    brief({ date, roots: [root], source: 'cursor', compiler: 'gemini', dataDir },
+      { runner: async () => assert.fail('invalid compiler must not reach a CLI') }),
+    /--compiler/
+  );
+});
+
+// Claude Code and Cursor Agent CLI share the same result-envelope shape.
+function jsonEnvelopeRunner(calls = []) {
+  return async request => {
+    calls.push(request);
+    const variables = JSON.parse(request.stdin.split('VARIABLES:\n')[1] ?? '{}');
+    const evidenceId = JSON.parse(variables.allowedEvidenceIdsJson ?? '[]')[0] ?? `session:cursor:${variables.expectedSessionId ?? 'session-1'}`;
+    const sessionId = variables.expectedSessionId ?? JSON.parse(variables.allowedSessionIdsJson ?? '[]')[0] ?? 'session-1';
+    let output;
+    if (request.stdin.includes('Digest exactly one')) {
+      output = {
+        sessionId,
+        summary: '完成 Cursor 编译路径。',
+        currentStop: '等待接入 Today UI。',
+        participation: { human: '用户确定方向。', agent: 'Agent 完成实现。' },
+        evidenceIds: [evidenceId],
+        uncertainties: []
+      };
+    } else if (request.stdin.includes('Reconstruct cross-Session')) {
+      output = {
+        worklines: [{
+          worklineId: 'workline-cursor-today',
+          title: 'Cursor 编译路径',
+          summary: '把 Cursor Agent CLI 接到 Today 流程。',
+          startedAt: '2026-08-29T01:00:00.000Z',
+          endedAt: '2026-08-29T01:10:00.000Z',
+          currentStop: '等待 UI 切换。',
+          possibleChange: 'Cursor-only 来源可以独立整理。',
+          participation: { human: '确定产品方向。', agent: '完成工程实现。' },
+          evidenceReadiness: 'ready',
+          sessionIds: [sessionId],
+          evidenceIds: [evidenceId],
+          extensions: []
+        }],
+        assignments: [{ sessionId, worklineIds: ['workline-cursor-today'] }],
+        unresolvedSessionIds: []
+      };
+    } else {
+      throw new Error(`Unexpected structured prompt: ${request.stdin.slice(0, 80)}`);
+    }
+    return {
+      stdout: JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(output) }),
+      stderr: ''
+    };
+  };
+}
+
+
+test('Cursor rejects a renamed session and retries without a poisoned digest cache', async t => {
+  const { root, dataDir } = await cursorFixture(t, 'cursor-invalid-digest');
+  const options = { date, roots: [root], source: 'cursor', dataDir };
+  const runner = jsonEnvelopeRunner();
+  await assert.rejects(brief(options, { runner: async request => {
+    const response = await runner(request);
+    if (request.stdin.includes('Digest exactly one')) {
+      const envelope = JSON.parse(response.stdout);
+      const output = JSON.parse(envelope.result);
+      output.sessionId = 'foreign-session';
+      envelope.result = JSON.stringify(output);
+      return { ...response, stdout: JSON.stringify(envelope) };
+    }
+    return response;
+  } }), /Digest|Session|digest|Session ID/);
+  const calls = [];
+  const result = await brief(options, { runner: jsonEnvelopeRunner(calls) });
+  assert.equal(result.mode, 'compiled');
+  assert.ok(calls.some(call => call.stdin.includes('Digest exactly one')));
+});
+
+
+test('Cursor stale evidence refresh hint is limited to rewritten frozen bytes', async t => {
+  for (const rewrite of [false, true]) {
+    const { root, sessionId, dataDir } = await cursorFixture(t, `cursor-stale-hint-${rewrite}`);
+    const options = { date, roots: [root], source: 'cursor', dataDir };
+    await brief(options, { runner: jsonEnvelopeRunner() });
+    const file = path.join(root, 'agent-transcripts', sessionId, `${sessionId}.jsonl`);
+    const original = await fs.readFile(file, 'utf8');
+    if (rewrite) await fs.writeFile(file, original.replace('把 Cursor 接进 brief', '改写 Cursor 原文内容'));
+    else await fs.appendFile(file, '\n' + JSON.stringify({ role: 'assistant', content: 'later activity' }));
+    await assert.rejects(brief({ ...options, workline: '1' }, {
+      runner: async () => { throw new Error('provider offline'); }
+    }), error => {
+      if (rewrite) assert.match(error.message, /--refresh/);
+      else {
+        assert.match(error.message, /provider offline/);
+        assert.doesNotMatch(error.message, /--refresh/);
+      }
+      return true;
+    });
+  }
+});
