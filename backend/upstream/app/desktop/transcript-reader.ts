@@ -1,3 +1,4 @@
+import { parseCursorTimestamp } from "../../src/agent-sessions";
 import type { AgentPlatform } from "../../src/types";
 import type {
   SessionTranscriptActivityWindow,
@@ -183,10 +184,8 @@ function parseCopilotMessages(records: Record<string, unknown>[]): {
 
 function timestampFromCursorText(value: unknown): string | undefined {
   const text = extractContent(value);
-  const tagged = text?.match(/^\s*<timestamp>\s*([^<]+?)\s*<\/timestamp>/i);
-  if (!tagged) return undefined;
-  const parsed = Date.parse(tagged[1]!.trim());
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+  const parsed = text ? parseCursorTimestamp(text) : undefined;
+  return parsed === undefined ? undefined : new Date(parsed).toISOString();
 }
 
 function pushActivityWindow(

@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/WdBlink/agent-notebook",
-  "commit": "f3b7a31034a3d6f697cb166d39095268ecef8388",
+  "commit": "6fd52c29a2df575e03f948ba470a71fb746f8571",
   "source": "working-tree",
   "files": {
     "LICENSE": "24f266210ee5aae6ef6b6f5f0156139347a0c850f4e7e5f546ef3004e5149e42",
@@ -17,11 +17,11 @@
     "app/desktop/structured-today-runtime.ts": "902bfadb36a1042dd024a487d1b2162b9770ff29a84f3c7931f82571bbea5677",
     "app/desktop/traceink-asset-repository.ts": "9458c7cdeee2a38da00110ab5bb7c0a3717e582f6f41cb3d28a2fcd6a8194c2a",
     "app/desktop/traceink-asset-store.ts": "430f8709efbdf246916a441a622e9371c67bfec95d825c1a63e874943e8b17c2",
-    "app/desktop/transcript-reader.ts": "5a9323e16d3d6ed5f148a4a97394c8277e5c64f0b18e530f8fe222a3c7b91eeb",
+    "app/desktop/transcript-reader.ts": "6166453144eac5ae60c95436064c4a8e9ec38230af24959eda701d9d0e71db72",
     "app/desktop/transcript-source-reader.ts": "51786085745e42cb1952fbd903284159f0613e59300e438d02f5911b47c0598b",
     "skills/traceink/SKILL.md": "0596391934a10552937ab4b16c3a22911a8915d50670f5075c2e52eb3db002ca",
     "skills/traceink/references/editorial-contract.md": "9b39a78a37c62677b487cb29931c158fda4183a0e7b7efeb3b1eab231caa5279",
-    "src/agent-sessions.ts": "96b29c8b43abd0e39d6c2283e3ad39411d99d62e9dbaea8b502f26d8dc177046",
+    "src/agent-sessions.ts": "061ed3610760d6abfe4484b0a1f36d19d8959a0e8f6e2b2f01028ac484530bc4",
     "src/agent-summary.ts": "ae1a714dfcdbc3985cc2051644ab245aebf1bd4ff5fb38b6a97578c4d0acc6d3",
     "src/cli-output-collector.ts": "f126d747fa5a36cd2f74b9987e23e660f4f9f20bb53e6dd057a79415b03934f4",
     "src/constants.ts": "ef22f814f8f56acc919b233e6094c2f4de896405a419a374c62cd35327f6472f",
@@ -54,6 +54,6 @@
     "tests/structured-today-provider-schema.test.ts": "302778e64f6d9b6f253aee3042905bf2d6f32e3392d9d3956f73d9114e51da70",
     "tests/structured-today-workflow.test.ts": "cf76f9258a15b1d0575df2d021773f1c3dd572db7a18d3b5e22d44e157b3b907",
     "tests/traceink-asset-repository.test.ts": "a3acb722ebdb91f3143f059ea8e0410b876b43478ba76f8e9e8af1700b2c3b80",
-    "tests/transcript-reader.test.ts": "1fc923b8bf7d1b65abedaf57ab2cb25fa24b0c9f65b8af71b377100d5bcb065f"
+    "tests/transcript-reader.test.ts": "2398b2d4907ba2dc1f86ecd7bce368773f319fb369670a108649e73912c1066a"
   }
 }

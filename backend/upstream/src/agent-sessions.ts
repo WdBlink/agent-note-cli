@@ -1084,9 +1084,17 @@ function recordInstants(value: unknown, platform: AgentPlatform): number[] {
   const message = asRecord(record?.message);
   if ((record?.role ?? message?.role) !== "user") return [];
   const text = collectTextFragments(message?.content ?? record?.content).join("\n");
+  const embedded = parseCursorTimestamp(text);
+  return embedded === undefined ? [] : [embedded];
+}
+
+export function parseCursorTimestamp(text: string): number | undefined {
   const tagged = text.match(/^\s*<timestamp>\s*([^<]+?)\s*<\/timestamp>/i);
-  const embedded = tagged ? Date.parse(tagged[1]!.trim()) : NaN;
-  return Number.isFinite(embedded) ? [embedded] : [];
+  if (!tagged) return undefined;
+  // Date.parse treats parentheses as comments, otherwise silently dropping Cursor's timezone.
+  const timestamp = tagged[1]!.trim().replace(/\((UTC|GMT)([+-]\d{1,2}(?::?\d{2})?)\)/gi, "$1$2");
+  const instant = Date.parse(timestamp);
+  return Number.isFinite(instant) ? instant : undefined;
 }
 
 function firstInstantIso(records: unknown[], platform: AgentPlatform): string | undefined {
