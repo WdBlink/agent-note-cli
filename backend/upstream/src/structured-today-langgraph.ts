@@ -601,6 +601,7 @@ async function executeDigest(
   }
   await emitProgress(dependencies, { stage: "digest", status: "running", sessionId: item.session.sessionId });
   try {
+    const humanAuthority = digestHasHumanAuthority(item);
     const result = await dependencies.models.digestSession({
       logicalDate: item.logicalDate,
       editorialContract: item.editorialContract,
@@ -619,7 +620,7 @@ async function executeDigest(
     const invented = result.output.evidenceIds.find((id) => !allowedEvidence.has(id));
     if (invented) throw new Error(`Digest invented evidence ID ${invented}.`);
     await emitProgress(dependencies, { stage: "digest", status: "ready", sessionId: item.session.sessionId });
-    const digest = enforceDigestParticipationAuthority(result.output, item.session.lineage?.origin);
+    const digest = enforceDigestParticipationAuthority(result.output, humanAuthority);
     return {
       status: "success",
       nodeOutputId: result.invocation.invocationId,
@@ -636,11 +637,23 @@ async function executeDigest(
   }
 }
 
-function enforceDigestParticipationAuthority(
-  digest: SessionDigestCandidate,
-  origin: "primary" | "subagent" | "automation" | "unknown" | undefined
-) {
-  if (origin === "primary") return digest;
+function digestHasHumanAuthority(item: z.infer<typeof DigestWorkItemSchema>): boolean {
+  if (item.session.lineage?.origin !== "primary") return false;
+  if (item.session.provider !== "copilot") return true;
+  const evidence = z.object({
+    messages: z.array(z.object({
+      role: z.string(),
+      authorKind: z.string().optional(),
+      familySessionId: z.string().optional(),
+      familyRelation: z.string().optional()
+    }))
+  }).parse(JSON.parse(item.evidenceText));
+  return evidence.messages.some(message => message.role === "user" && message.authorKind === "human" &&
+    message.familySessionId === item.session.sessionId && message.familyRelation === "primary");
+}
+
+function enforceDigestParticipationAuthority(digest: SessionDigestCandidate, humanAuthority: boolean) {
+  if (humanAuthority) return digest;
   if (!digest) return digest;
   const participation = digest.participation;
   if (!participation.human && !participation.joint) return digest;

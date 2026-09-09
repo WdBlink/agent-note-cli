@@ -347,6 +347,9 @@ function extractSessionLineage(
   path?: string
 ): AgentWorkSession["lineage"] | undefined {
   if (platform === "claude") return { origin: "primary" };
+  if (platform === "copilot") {
+    return { origin: stringField(copilotSessionData(records), "sessionId")?.trim() ? "primary" : "unknown" };
+  }
   if (platform === "cursor") {
     const parentSessionId = cursorIdentityFromPath(path ?? "")?.parentSessionId;
     return parentSessionId ? { origin: "subagent", parentSessionId, agentRole: "worker" } : { origin: "primary" };
