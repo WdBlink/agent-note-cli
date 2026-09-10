@@ -52,7 +52,7 @@ class App:
         os.write(self.master, text.encode())
 
     def back(self, title):
-        self.send('\x1b')
+        self.send('q')
         self.expect('/    ' + title)
 
     def drain(self):
@@ -171,7 +171,7 @@ process.stdin.on('end', async () => {{
         while not (root / 'started').exists() and time.monotonic() < deadline:
             app.drain()
         assert (root / 'started').exists(), 'fake provider never started'
-        app.send('\x1b')
+        app.send('q')
         app.expect('/    工作脉络')
         assert not list((root / 'data').glob('*/writer.lock')), 'cancel left a writer lock'
         fcntl.ioctl(app.master, termios.TIOCSWINSZ, struct.pack('HHHH', 16, 38, 0, 0))
@@ -190,9 +190,9 @@ process.stdin.on('end', async () => {{
         app.expect('\x1b]1337;File=inline=1;')
         app.expect('/    首页')
         assert b'\x1b[48;2;28;25;22m' in app.buffer, '--color always did not restore the TUI palette'
-        app.send('q')
-        app.expect('再次退出(q)')
-        app.send('q')
+        app.send('\x1b')
+        app.expect('再次退出(Esc)')
+        app.send('\x1b')
         app.expect('\x1b[?1049l')
         assert app.child.wait(timeout=5) == 0
     finally:
@@ -201,4 +201,4 @@ process.stdin.on('end', async () => {{
     invalid = subprocess.run([shutil.which('node'), str(repo / 'src/cli.mjs'), 'ui', '--color', 'invalid'], capture_output=True, text=True)
     assert invalid.returncode == 1 and '--color 必须' in invalid.stderr
 
-print('PTY acceptance passed: generation, dossier, frozen source, guarded session jump, q back, confirmed q/Ctrl+C exit, invalid date, cancellation, resize and terminal restoration.')
+print('PTY acceptance passed: generation, dossier, frozen source, guarded session jump, q back, confirmed q/Esc/Ctrl+C exit, invalid date, cancellation, resize and terminal restoration.')
