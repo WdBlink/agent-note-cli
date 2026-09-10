@@ -35,6 +35,8 @@ export function wrap(text, columns) {
 }
 
 const row = (text, tone) => ({ text, tone });
+const shortcut = (action, key) => `${action}(${key})`;
+const shortcuts = entries => entries.filter(([, key]) => key).map(([action, key]) => shortcut(action, key)).join(' · ');
 // Warm ink, paper, leather and the notebook's green bookmark. No terminal-theme dependency.
 const base = '\x1b[0m\x1b[48;2;28;25;22m\x1b[38;2;223;211;191m';
 const tones = {
@@ -103,7 +105,7 @@ function navigation(key, pageSize) {
 }
 
 export class Terminal {
-  constructor({ input = process.stdin, output = process.stdout, signals = process, color = 'auto' } = {}) {
+  constructor({ input = process.stdin, output = process.stdout, signals = process, color = 'auto', exitConfirmMs = 2000 } = {}) {
     this.input = input;
     this.output = output;
     this.signals = signals;
@@ -118,6 +120,7 @@ export class Terminal {
     this.context = '';
     this.keys = [];
     this.pictures = new Map();
+    this.exitConfirmMs = exitConfirmMs;
   }
 
   start() {
@@ -129,11 +132,12 @@ export class Terminal {
     emitKeypressEvents(this.input);
     this.onKey = (text, key = {}) => {
       this.transitionAbort?.abort();
-      if (key.ctrl && key.name === 'c') return this.stop(true);
-      if (this.transitionAbort && text === 'q') return this.stop();
+      if (key.ctrl && key.name === 'c') return this.requestExit('Ctrl+C');
+      if (this.transitionAbort && text === 'q') return this.requestExit('q');
+      if (this.exitConfirmation && text !== 'q') this.clearExitConfirmation();
       if (this.controller) {
         if (key.name === 'escape') this.controller.abort();
-        if (text === 'q') this.stop();
+        if (text === 'q') this.controller.abort();
         return;
       }
       const resolve = this.pending;
@@ -156,10 +160,43 @@ export class Terminal {
   stop(interrupted = false) {
     this.interrupted ||= interrupted;
     this.quit = true;
+    this.clearExitConfirmation(false);
     this.transitionAbort?.abort();
     this.controller?.abort();
     this.pending?.({ name: 'escape' });
     this.pending = undefined;
+  }
+
+  requestExit(key) {
+    const now = Date.now();
+    if (this.exitConfirmation?.key === key && this.exitConfirmation.expiresAt > now) {
+      this.stop(key === 'Ctrl+C');
+      return true;
+    }
+    this.clearExitConfirmation(false);
+    this.exitConfirmation = { key, expiresAt: now + this.exitConfirmMs };
+    this.exitConfirmationTimer = setTimeout(() => {
+      this.exitConfirmation = undefined;
+      this.exitConfirmationTimer = undefined;
+      this.draw();
+    }, this.exitConfirmMs);
+    this.exitConfirmationTimer.unref?.();
+    this.draw();
+    return false;
+  }
+
+  clearExitConfirmation(redraw = true) {
+    if (!this.exitConfirmation) return;
+    clearTimeout(this.exitConfirmationTimer);
+    this.exitConfirmation = undefined;
+    this.exitConfirmationTimer = undefined;
+    if (redraw) this.draw();
+  }
+
+  exitFooter(footer) {
+    return this.exitConfirmation
+      ? `再次退出(${this.exitConfirmation.key}) · ${Math.ceil((this.exitConfirmation.expiresAt - Date.now()) / 1000)} 秒后取消`
+      : footer;
   }
 
   close() {
@@ -203,7 +240,7 @@ export class Terminal {
         this.show(() => this.withArtwork({ title: closing ? '再会' : '欢迎',
           body: ['', '', row(closing ? '合上笔记，回到工作。' : '翻开今天的工作。', 'strong'), '',
             row(closing ? '下次从这里继续。' : '从会话中找回推进的事情。', 'muted')],
-          footer: '按任意键跳过', note: '' }, asset));
+          footer: shortcut('跳过', '任意键'), note: '' }, asset));
         await delay(closing ? 100 : asset === 'notebook-open' ? 220 : 140, undefined, { signal });
       }
     } catch (error) { if (!signal.aborted) throw error; }
@@ -215,14 +252,15 @@ export class Terminal {
   draw() {
     if (!this.renderScreen) return;
     const screen = this.columns < 24 || this.rows < 12
-      ? { title: '窗口较小', body: ['请放大到至少 24 × 12。'], footer: 'Ctrl-C 退出' }
+      ? { title: '窗口较小', body: ['请放大到至少 24 × 12。'], footer: shortcut('退出', 'Ctrl+C') }
       : this.renderScreen();
     const brandArtwork = this.columns >= 60 && this.rows >= 16;
     const mark = { asset: 'mark', row: 2, column: insetFor(this.columns) + 1 };
     const picture = this.color && this.graphics && (screen.picture || (brandArtwork ? {
       asset: 'notebook', row: 2, column: insetFor(this.columns) + 1, columns: 4, rows: 2
     } : undefined));
-    const lines = frame({ columns: this.columns, rows: this.rows, color: this.color, context: this.context, brandArtwork, ...screen }).split('\r\n');
+    const lines = frame({ columns: this.columns, rows: this.rows, color: this.color, context: this.context, brandArtwork,
+      ...screen, footer: this.exitFooter(screen.footer ?? '') }).split('\r\n');
     if (!picture) {
       for (const art of [brandArtwork && mark, screen.pixelArt].filter(Boolean)) {
         const pixels = renderNotebook(art.asset, this.color, background(this.color), art.writingElapsed);
@@ -277,7 +315,7 @@ export class Terminal {
     if (output) this.output.write(output);
   }
 
-  async menu({ title, description = '', items, searchable = false, initial = 0, note = '', actions = {}, enterLabel = '打开' }) {
+  async menu({ title, description = '', items, searchable = false, initial = 0, note = '', actions = {}, enterLabel = '打开', root = false }) {
     let selected = initial, query = '', searching = false;
     const matches = () => items.filter(item => `${item.label} ${item.hint ?? ''}`.toLowerCase().includes(query.toLowerCase()));
     const render = () => {
@@ -307,7 +345,11 @@ export class Terminal {
       }
       return { title, body,
         note: searching || query ? `搜索 / ${query}▏   ${list.length} 项` : (typeof note === 'function' ? note() : note) || (list.length ? `${selected + 1} / ${list.length}` : ''),
-        footer: searching ? '输入筛选 · Enter 完成 · Esc 清除' : this.columns < 50 ? `↑↓ Enter ${Object.keys(actions).join('/')} Esc q` : `↑↓  Enter${enterLabel}${Object.entries(actions).map(([key, action]) => `  ${key}${action}`).join('')}${searchable && this.columns >= 60 ? '  /搜索' : ''}  Esc返回  q退出` };
+        footer: searching ? shortcuts([['完成', 'Enter'], ['清除', 'Esc']])
+          : this.columns < 50
+            ? `${shortcut(Object.keys(actions).length ? '操作' : enterLabel, Object.keys(actions).join('/') || 'Enter')} ${shortcut(root ? '退出' : '返回', 'q')}`
+            : shortcuts([['移动', '↑↓'], [enterLabel, 'Enter'], ...Object.entries(actions).map(([key, action]) => [action, key]),
+              ...(searchable && this.columns >= 60 ? [['搜索', '/']] : []), ['返回', 'Esc'], [root ? '退出' : '返回', 'q'], ['退出', 'Ctrl+C']]) };
     };
     this.show(render);
     while (!this.quit) {
@@ -319,7 +361,14 @@ export class Terminal {
         else if (key.name === 'backspace') query = segments(query).slice(0, -1).join('');
         else if (!key.ctrl && !key.meta && key.text && clean(key.text) === key.text) query = (query + key.text).slice(0, 160);
         selected = 0;
-      } else if (key.text === 'q') { this.stop(); return null; }
+      } else if (key.text === 'q') {
+        if (root) {
+          if (this.requestExit('q')) return null;
+        } else {
+          this.clearExitConfirmation(false);
+          return null;
+        }
+      }
       else if (!key.ctrl && !key.meta && actions[key.text] && matches()[selected]) return { ...matches()[selected], action: key.text };
       else if (key.text === '/' && searchable) searching = true;
       else if (navigation(key, Math.max(1, Math.floor((this.capacity - 2) / 2))) !== undefined) {
@@ -350,13 +399,15 @@ export class Terminal {
       scroll = Math.max(0, Math.min(scroll, lines.length - this.capacity));
       position.scroll = scroll;
       return { title, body: lines.slice(scroll), note: (typeof note === 'function' ? note() : note) || `${scroll + 1}–${Math.min(lines.length, scroll + this.capacity)} / ${lines.length} 行`,
-        footer: this.columns < 50 ? `↑↓ ${Object.keys(actions).join('/')} ? Esc` : this.columns < 100 ? `↑↓ ${Object.entries(actions).map(([key, action]) => `${key}${action.slice(0, 2)}`).join(' ')} ?键位 Esc返回` : `↑↓ 滚动 · ? 键位${Object.entries(actions).map(([key, action]) => ` · ${key} ${action}`).join('')} · Esc 返回` };
+        footer: this.columns < 50
+          ? `${shortcut('操作', Object.keys(actions).join('/') || '↑↓')} ${shortcut('返回', 'q')}`
+          : shortcuts([['滚动', '↑↓'], ['键位', '?'], ...Object.entries(actions).map(([key, action]) => [action, key]), ['返回', 'q/Esc'], ['退出', 'Ctrl+C']]) };
     };
     this.show(render);
     while (!this.quit) {
       const key = await this.next();
       if (key.name === 'escape') return null;
-      if (key.text === 'q') { this.stop(); return null; }
+      if (key.text === 'q') { this.clearExitConfirmation(false); return null; }
       if (!key.ctrl && !key.meta && actions[key.text]) return key.text;
       if (key.text === '?') {
         await this.read({ title: '阅读键位', text: [...Object.entries(actions).map(([key, action]) => `${key}：${action}`), '↑↓ / j k / Ctrl-N P：逐行滚动\nCtrl-F / Ctrl-B：下翻 / 上翻一页\nCtrl-D / Ctrl-U：下翻 / 上翻半页\nCtrl-V / Alt-V：下翻 / 上翻一页（Emacs）\nPageDown / PageUp：下翻 / 上翻一页\ng / G / Home / End：首行 / 末页\nSpace：下翻一页\nEsc：返回'].join('\n') });
@@ -372,7 +423,8 @@ export class Terminal {
 
   async prompt({ title, label, value = '', hint = '', validate = () => {} }) {
     let text = value, error = '';
-    this.show(() => ({ title, body: [row(label, 'strong'), ...wrap(`${text}▏`, this.contentWidth).slice(-Math.max(1, this.capacity - 3)), row(hint, 'muted'), row(error, 'warning')], footer: this.columns < 60 ? 'Enter确认 Esc取消 Ctrl-U清空' : 'Enter 确认 · Esc 取消 · Ctrl-U 清空' }));
+    this.show(() => ({ title, body: [row(label, 'strong'), ...wrap(`${text}▏`, this.contentWidth).slice(-Math.max(1, this.capacity - 3)), row(hint, 'muted'), row(error, 'warning')],
+      footer: shortcuts([['确认', 'Enter'], ['取消', 'Esc'], ['清空', 'Ctrl+U'], ['退出', 'Ctrl+C']]) }));
     while (!this.quit) {
       const key = await this.next();
       if (key.name === 'escape') return null;
@@ -413,7 +465,8 @@ export class Terminal {
           row(labels[p.stage] ?? p.stage, active ? 'strong' : 'muted'),
           row(`  ${p.sessionId ?? ({ ready: '已完成', failed: '未完成', excluded: '已排除', running: signal.aborted ? '正在停止' : '进行中', pending: '等待' }[p.status] ?? '')}`, 'muted')));
       }
-      const screen = { title, body, note: `已用 ${Math.floor(elapsed / 1000)} 秒 · ${deep ? '分析 → 核查 → 成文' : '保留已有内容'}`, footer: 'Esc 取消并返回 · q 取消并退出' };
+      const screen = { title, body, note: `已用 ${Math.floor(elapsed / 1000)} 秒 · ${deep ? '分析 → 核查 → 成文' : '保留已有内容'}`,
+        footer: shortcuts([['取消并返回', 'q/Esc'], ['退出', 'Ctrl+C']]) };
       return elapsed < 600 ? screen : this.withArtwork(screen, signal.aborted ? 'notebook' : notebookFrames[Math.min(notebookFrames.length - 1, Math.floor((elapsed - 600) / 140))], elapsed - 1160);
     };
     let shown = false;
