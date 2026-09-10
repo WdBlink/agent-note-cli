@@ -301,7 +301,7 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
     }
   }
 
-  const help = '在终端里，读懂和 Agent 一起推进的工作。\n\n基本操作\n↑↓、j / k 或 Ctrl-N/P 移动，Enter 打开，q 或 Esc 返回。首页连续按两次 q 退出；任意页面连续按两次 Ctrl+C 退出。两次按键间隔超过 2 秒时，退出确认会自动取消。列表按 / 搜索，数字 1–9 可直接打开对应项。\n\n长文阅读\n↑↓、j / k 或 Ctrl-N/P 逐行滚动。Ctrl-F/B 整页翻动，Ctrl-D/U 半页翻动；Emacs 可用 Ctrl-V / Alt-V。PageDown/Up 同样可用，Space 保留向下翻页。g / G 或 Home / End 跳转首尾。工作线中 o 直达会话，d 深读，s 查看来源，e 导出。来源列表 Enter 阅读原文、o 直达；多个会话先选择。直达只切换现有窗口，状态不明时不会另开 CLI 进程。\n\n模型调用\n浏览和切换范围只读取会话与已保存结果。只有选择生成简报、重新整理或首次深读才调用模型并使用额度。进度页按 q 或 Esc 取消；已保存的结果仍保留。\n\n来源与版本\n来源按冻结范围校验后打开。工作线选择绑定到看到的版本；列表变化时会提示重新选择。\n\n脚本接口\nagent-note brief --read-only --format json\nagent-note brief --date YYYY-MM-DD --source codex\nagent-note ui --source claude --skip-intro\n\n数据\n来源偏好保存在 UI 设置中。日期与项目只影响本次浏览。Provider 的登录和模型默认值由宿主机配置管理。';
+  const help = '在终端里，读懂和 Agent 一起推进的工作。\n\n基本操作\n↑↓、j / k 或 Ctrl-N/P 移动，Enter 打开，q 返回。首页连续按两次 q 退出；任意页面连续按两次 Esc 或 Ctrl+C 退出。两次按键间隔超过 2 秒时，退出确认会自动取消。页面底部只提示 Esc，不显示 Ctrl+C。列表按 / 搜索，数字 1–9 可直接打开对应项。\n\n长文阅读\n↑↓、j / k 或 Ctrl-N/P 逐行滚动。Ctrl-F/B 整页翻动，Ctrl-D/U 半页翻动；Emacs 可用 Ctrl-V / Alt-V。PageDown/Up 同样可用，Space 保留向下翻页。g / G 或 Home / End 跳转首尾。工作线中 o 直达会话，d 深读，s 查看来源，e 导出。来源列表 Enter 阅读原文、o 直达；多个会话先选择。直达只切换现有窗口，状态不明时不会另开 CLI 进程。\n\n模型调用\n浏览和切换范围只读取会话与已保存结果。只有选择生成简报、重新整理或首次深读才调用模型并使用额度。进度页按 q 取消并返回；已保存的结果仍保留。\n\n来源与版本\n来源按冻结范围校验后打开。工作线选择绑定到看到的版本；列表变化时会提示重新选择。\n\n脚本接口\nagent-note brief --read-only --format json\nagent-note brief --date YYYY-MM-DD --source codex\nagent-note ui --source claude --skip-intro\n\n数据\n来源偏好保存在 UI 设置中。日期与项目只影响本次浏览。Provider 的登录和模型默认值由宿主机配置管理。';
 
   const updateController = new AbortController();
   let updateStatus = process.env.AGENT_NOTE_NO_UPDATE_CHECK === '1' ? '自动检查已关闭' : '正在后台检查更新…';

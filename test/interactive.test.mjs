@@ -335,7 +335,7 @@ test('terminal handles buffered arrows, Unicode search, resize, paging and resto
     const beforeResize = f.text().length;
     f.output.columns = 38; f.output.rows = 16; f.output.emit('resize');
     assert.ok(f.text().slice(beforeResize).includes(`第 ${firstAfterPage} 行`));
-    f.input.emit('keypress', undefined, { name: 'escape' });
+    f.input.write('q');
     await reading;
   } finally { f.terminal.close(); }
   assert.equal(f.input.isRaw, false);
@@ -375,14 +375,14 @@ test('narrow jump pages keep action and return keys visible and explain actions 
     f.input.write('?');
     await tick();
     assert.ok(f.text().includes('o：直达会话'));
-    f.input.emit('keypress', undefined, { name: 'escape' });
+    f.input.write('q');
     await tick();
-    f.input.emit('keypress', undefined, { name: 'escape' });
+    f.input.write('q');
     await reading;
   } finally { f.terminal.close(); }
 });
 
-test('q returns from child pages while home q and Ctrl+C require a timely second press', async t => {
+test('q returns from child pages and every exit shortcut requires a timely second press', async t => {
   const f = tty(t, { exitConfirmMs: 30 });
   f.terminal.start();
   try {
@@ -409,6 +409,7 @@ test('q returns from child pages while home q and Ctrl+C require a timely second
   ctrl.terminal.start();
   try {
     const reading = ctrl.terminal.read({ title: '正文', text: '内容' });
+    assert.doesNotMatch(ctrl.terminal.renderScreen().footer, /Ctrl\+C/);
     ctrl.input.emit('keypress', undefined, { name: 'c', ctrl: true });
     await tick();
     assert.equal(ctrl.terminal.quit, false);
@@ -417,6 +418,19 @@ test('q returns from child pages while home q and Ctrl+C require a timely second
     await reading;
     assert.equal(ctrl.terminal.quit, true);
   } finally { ctrl.terminal.close(); }
+
+  const escape = tty(t, { exitConfirmMs: 100 });
+  escape.terminal.start();
+  try {
+    const reading = escape.terminal.read({ title: '正文', text: '内容' });
+    escape.input.emit('keypress', undefined, { name: 'escape' });
+    await tick();
+    assert.equal(escape.terminal.quit, false);
+    assert.match(escape.text(), /再次退出\(Esc\)/);
+    escape.input.emit('keypress', undefined, { name: 'escape' });
+    await reading;
+    assert.equal(escape.terminal.quit, true);
+  } finally { escape.terminal.close(); }
 });
 
 test('q cancels active work without exiting the application', async t => {
@@ -454,7 +468,7 @@ test('background status redraw preserves menu selection and reader position', as
     f.terminal.draw();
     assert.equal(position.scroll, scroll);
     assert.match(f.text(), /暂时无法检查更新/);
-    f.input.emit('keypress', undefined, { name: 'escape' });
+    f.input.write('q');
     await reading;
   } finally { f.terminal.close(); }
 });
@@ -554,7 +568,7 @@ test('warm theme keeps focus out of the preview, formats reading and animates on
 
     const reading = f.terminal.read({ title: '深读', markdown: true, text: '# 主题\n\n## 如何验证\n\n' + '中文阅读'.repeat(40) });
     assert.ok(f.text().includes('▎ 如何验证'));
-    f.input.emit('keypress', undefined, { name: 'escape' });
+    f.input.write('q');
     await reading;
 
     t.mock.timers.enable({ apis: ['Date', 'setInterval', 'setTimeout'] });
@@ -689,7 +703,7 @@ test('native image protocols transmit the bundled PNG and clean up on navigation
       const reading = f.terminal.read({ title: '深读', text: '已打开正文' });
       const next = f.text().slice(offset);
       assert.ok(protocol === 'kitty' ? next.includes(`a=d,d=I,i=${process.pid}`) : next.includes('\x1b[2J'));
-      f.input.emit('keypress', undefined, { name: 'escape' });
+      f.input.write('q');
       await reading;
     } finally { f.terminal.close(); }
   }
