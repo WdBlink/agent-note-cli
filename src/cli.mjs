@@ -27,6 +27,7 @@ const help = `Agent Note CLI · 与 Agent Notebook 相同的 Today 后端
   --data-dir PATH                    CLI 数据目录
   --format text|markdown|json         输出格式
   --color auto|always|never           TUI 配色，always 覆盖 NO_COLOR，默认 auto
+  --skip-intro                        跳过交互界面的启动动画
   --help / --version                  帮助 / 版本
 
 首次生成及刷新使用与 App 相同的模型调用，会发送会话证据并消耗你的额度。
@@ -41,7 +42,7 @@ async function main() {
     root: { type: 'string', multiple: true }, settings: { type: 'string' }, 'data-dir': { type: 'string' },
     'codex-model': { type: 'string' }, 'claude-model': { type: 'string' }, 'cursor-model': { type: 'string' },
     format: { type: 'string', default: 'text' }, workline: { type: 'string' }, color: { type: 'string', default: 'auto' },
-    'read-only': { type: 'boolean' }, refresh: { type: 'boolean' },
+    'read-only': { type: 'boolean' }, refresh: { type: 'boolean' }, 'skip-intro': { type: 'boolean' },
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' }
   } });
   if (v.help) return void process.stdout.write(help);
@@ -80,7 +81,7 @@ async function main() {
   };
   if (interactive) {
     const { runInteractive } = await import('./interactive.mjs');
-    return runInteractive({ ...options, color: v.color });
+    return runInteractive({ ...options, color: v.color, skipIntro: v['skip-intro'] });
   }
   const controller = new AbortController();
   const stop = () => { process.exitCode = 130; controller.abort(); };

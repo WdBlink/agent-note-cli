@@ -102,6 +102,15 @@ test('update checks do not block home, refresh status without navigation and abo
     updateChecker: ({ signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })) });
 });
 
+test('skip-intro opens the home screen without running the opening transition', async t => {
+  const f = await fixture(t);
+  const terminal = new ScriptedTerminal([['menu', /^首页$/, null]]);
+  let transitions = 0;
+  terminal.transition = async () => { transitions++; };
+  await runInteractive({ ...f.options, skipIntro: true }, { terminal });
+  assert.equal(transitions, 1, 'only the closing transition runs');
+});
+
 test('offline update failure leaves home usable', async t => {
   const f = await fixture(t);
   const terminal = new ScriptedTerminal([]);
@@ -291,7 +300,7 @@ test('recoverable operation error stays in the app and supports retry', async t 
   assert.ok(terminal.closed);
 });
 
-function tty(t) {
+function tty(t, options = {}) {
   const originalTerm = process.env.TERM;
   process.env.TERM = 'xterm-256color';
   t.after(() => { if (originalTerm === undefined) delete process.env.TERM; else process.env.TERM = originalTerm; });
@@ -302,7 +311,7 @@ function tty(t) {
   const output = new Writable({ write(chunk, _encoding, done) { outputText += chunk.toString(); done(); } });
   output.isTTY = true; output.columns = 108; output.rows = 28;
   const signals = new EventEmitter();
-  const terminal = new Terminal({ input, output, signals });
+  const terminal = new Terminal({ input, output, signals, ...options });
   terminal.color = false;
   terminal.graphics = null;
   return { input, output, signals, terminal, text: () => outputText };
@@ -342,7 +351,7 @@ test('menu jump shortcut acts on the selected filtered item and does not steal s
     const selecting = f.terminal.menu({ title: '来源', items, actions: { o: '直达' }, searchable: true, enterLabel: '原文' });
     f.input.write('/oth\r\x0fo');
     assert.deepEqual(await selecting, { ...items[1], action: 'o' });
-    assert.match(f.text(), /Enter原文.*o直达/);
+    assert.match(f.text(), /原文\(Enter\).*直达\(o\)/);
     assert.equal(items[1].action, undefined, 'selecting an action does not mutate source identity');
     const reading = f.terminal.menu({ title: '来源', items, actions: { o: '直达' } });
     f.input.write('\r');
@@ -357,12 +366,12 @@ test('narrow jump pages keep action and return keys visible and explain actions 
   try {
     const selecting = f.terminal.menu({ title: '来源', items: [{ id: 'one', label: 'one' }], actions: { o: '直达' } });
     assert.ok(width(f.terminal.renderScreen().footer) <= f.terminal.contentWidth);
-    assert.match(f.terminal.renderScreen().footer, /o.*Esc/);
+    assert.match(f.terminal.renderScreen().footer, /操作\(o\).*返回\(q\)/);
     f.input.write('o');
     assert.equal((await selecting).action, 'o');
     const reading = f.terminal.read({ title: '工作线', text: '正文', actions: { o: '直达会话', d: '深读', s: '来源', e: '导出' } });
     assert.ok(width(f.terminal.renderScreen().footer) <= f.terminal.contentWidth);
-    assert.match(f.terminal.renderScreen().footer, /o\/d\/s\/e.*Esc/);
+    assert.match(f.terminal.renderScreen().footer, /操作\(o\/d\/s\/e\).*返回\(q\)/);
     f.input.write('?');
     await tick();
     assert.ok(f.text().includes('o：直达会话'));
@@ -370,6 +379,56 @@ test('narrow jump pages keep action and return keys visible and explain actions 
     await tick();
     f.input.emit('keypress', undefined, { name: 'escape' });
     await reading;
+  } finally { f.terminal.close(); }
+});
+
+test('q returns from child pages while home q and Ctrl+C require a timely second press', async t => {
+  const f = tty(t, { exitConfirmMs: 30 });
+  f.terminal.start();
+  try {
+    const child = f.terminal.menu({ title: '子页面', items: [{ id: 'one', label: 'one' }] });
+    f.input.write('q');
+    assert.equal(await child, null);
+    assert.equal(f.terminal.quit, false);
+
+    const home = f.terminal.menu({ title: '首页', root: true, items: [{ id: 'one', label: 'one' }] });
+    f.input.write('q');
+    await tick();
+    assert.equal(f.terminal.quit, false);
+    assert.match(f.text(), /再次退出\(q\)/);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    f.input.write('q');
+    await tick();
+    assert.equal(f.terminal.quit, false, 'an expired confirmation does not exit');
+    f.input.write('q');
+    assert.equal(await home, null);
+    assert.equal(f.terminal.quit, true);
+  } finally { f.terminal.close(); }
+
+  const ctrl = tty(t, { exitConfirmMs: 100 });
+  ctrl.terminal.start();
+  try {
+    const reading = ctrl.terminal.read({ title: '正文', text: '内容' });
+    ctrl.input.emit('keypress', undefined, { name: 'c', ctrl: true });
+    await tick();
+    assert.equal(ctrl.terminal.quit, false);
+    assert.match(ctrl.text(), /再次退出\(Ctrl\+C\)/);
+    ctrl.input.emit('keypress', undefined, { name: 'c', ctrl: true });
+    await reading;
+    assert.equal(ctrl.terminal.quit, true);
+  } finally { ctrl.terminal.close(); }
+});
+
+test('q cancels active work without exiting the application', async t => {
+  const f = tty(t);
+  f.terminal.start();
+  try {
+    const running = f.terminal.busy('测试取消', ({ signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+    }));
+    f.input.write('q');
+    assert.equal(await running, undefined);
+    assert.equal(f.terminal.quit, false);
   } finally { f.terminal.close(); }
 });
 

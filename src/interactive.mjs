@@ -301,7 +301,7 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
     }
   }
 
-  const help = '在终端里，读懂和 Agent 一起推进的工作。\n\n基本操作\n↑↓、j / k 或 Ctrl-N/P 移动，Enter 打开，Esc 返回，q 或 Ctrl-C 退出。列表按 / 搜索，数字 1–9 可直接打开对应项。\n\n长文阅读\n↑↓、j / k 或 Ctrl-N/P 逐行滚动。Ctrl-F/B 整页翻动，Ctrl-D/U 半页翻动；Emacs 可用 Ctrl-V / Alt-V。PageDown/Up 同样可用，Space 保留向下翻页。g / G 或 Home / End 跳转首尾。工作线中 o 直达会话，d 深读，s 查看来源，e 导出。来源列表 Enter 阅读原文、o 直达；多个会话先选择。直达只切换现有窗口，状态不明时不会另开 CLI 进程。\n\n模型调用\n浏览和切换范围只读取会话与已保存结果。只有选择生成简报、重新整理或首次深读才调用模型并使用额度。进度页按 Esc 取消；已保存的结果仍保留。\n\n来源与版本\n来源按冻结范围校验后打开。工作线选择绑定到看到的版本；列表变化时会提示重新选择。\n\n脚本接口\nagent-note brief --read-only --format json\nagent-note brief --date YYYY-MM-DD --source codex\nagent-note ui --source claude\n\n数据\n来源偏好保存在 UI 设置中。日期与项目只影响本次浏览。Provider 的登录和模型默认值由宿主机配置管理。';
+  const help = '在终端里，读懂和 Agent 一起推进的工作。\n\n基本操作\n↑↓、j / k 或 Ctrl-N/P 移动，Enter 打开，q 或 Esc 返回。首页连续按两次 q 退出；任意页面连续按两次 Ctrl+C 退出。两次按键间隔超过 2 秒时，退出确认会自动取消。列表按 / 搜索，数字 1–9 可直接打开对应项。\n\n长文阅读\n↑↓、j / k 或 Ctrl-N/P 逐行滚动。Ctrl-F/B 整页翻动，Ctrl-D/U 半页翻动；Emacs 可用 Ctrl-V / Alt-V。PageDown/Up 同样可用，Space 保留向下翻页。g / G 或 Home / End 跳转首尾。工作线中 o 直达会话，d 深读，s 查看来源，e 导出。来源列表 Enter 阅读原文、o 直达；多个会话先选择。直达只切换现有窗口，状态不明时不会另开 CLI 进程。\n\n模型调用\n浏览和切换范围只读取会话与已保存结果。只有选择生成简报、重新整理或首次深读才调用模型并使用额度。进度页按 q 或 Esc 取消；已保存的结果仍保留。\n\n来源与版本\n来源按冻结范围校验后打开。工作线选择绑定到看到的版本；列表变化时会提示重新选择。\n\n脚本接口\nagent-note brief --read-only --format json\nagent-note brief --date YYYY-MM-DD --source codex\nagent-note ui --source claude --skip-intro\n\n数据\n来源偏好保存在 UI 设置中。日期与项目只影响本次浏览。Provider 的登录和模型默认值由宿主机配置管理。';
 
   const updateController = new AbortController();
   let updateStatus = process.env.AGENT_NOTE_NO_UPDATE_CHECK === '1' ? '自动检查已关闭' : '正在后台检查更新…';
@@ -322,7 +322,7 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
       });
     }
     updateContext();
-    await terminal.transition();
+    if (!options.skipIntro) await terminal.transition();
     if (preferenceError) await terminal.read({ title: '设置读取失败', text: `${preferenceFile}\n\n${preferenceError.message}\n\n本次使用默认来源；可在首页重新选择并保存来源。` });
     if (!terminal.quit && preferences.lastSeenVersion !== version && await showReleaseNotes(`本次更新 / v${version}`) && !preferenceError) {
       try { await persistPreferences({ lastSeenVersion: version }); }
@@ -330,7 +330,7 @@ export async function runInteractive(initialOptions = {}, { terminal = new Termi
     }
     let homeSelection = 0;
     while (!terminal.quit) {
-      const choice = await terminal.menu({ title: '首页', initial: homeSelection, description: '今天，和 Agent 一起推进了什么？', note: () => updateStatus, items: [
+      const choice = await terminal.menu({ title: '首页', root: true, initial: homeSelection, description: '今天，和 Agent 一起推进了什么？', note: () => updateStatus, items: [
         option('brief', '工作脉络', view?.index ? `${view.index.worklines.length} 条工作线 · ${modeNames[view.mode]}` : '阅读简报，按工作线继续深读', 'WORK / 工作脉络\n\n从会话里找回推进的事情、当前停点和你的参与。\n\n已有简报直接阅读，新的整理由你发起。'),
         option('dates', '回看日期', options.date, 'HISTORY / 回看\n\n选择今天、最近几天或任意日期。\n\n每一天都保留自己的工作脉络。'),
         option('projects', '选择项目', options.project ?? '所有项目', 'SCOPE / 范围\n\n只关注一个项目，或查看一天里跨项目的工作。'),

@@ -20,7 +20,9 @@ test('release installs offline with bundled dependencies and runs its backend ou
   const bin = path.join(dir, 'app/node_modules/.bin/agent-note');
   const root = path.join(dir, 'codex');
   await fs.mkdir(root);
-  assert.match(execFileSync(bin, ['--help'], { encoding: 'utf8', cwd: dir }), /Agent Note CLI/);
+  const help = execFileSync(bin, ['--help'], { encoding: 'utf8', cwd: dir });
+  assert.match(help, /Agent Note CLI/);
+  assert.match(help, /--skip-intro/);
   const ui = spawnSync(bin, ['ui', '--data-dir', path.join(dir, 'data')], { encoding: 'utf8', cwd: dir, stdio: 'pipe' });
   assert.equal(ui.status, 1);
   assert.match(ui.stderr, /交互界面需要支持 ANSI 的终端/);

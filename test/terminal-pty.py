@@ -150,6 +150,10 @@ process.stdin.on('end', async () => {{
         app.send('\x152026-08-28\r')
         app.expect('这一天没有发现会话')
         app.send('q')
+        app.expect('/    首页')
+        app.send('q')
+        app.expect('再次退出(q)')
+        app.send('q')
         app.expect('\x1b[?1049l')
         assert app.child.wait(timeout=5) == 0
     finally:
@@ -172,7 +176,9 @@ process.stdin.on('end', async () => {{
         assert not list((root / 'data').glob('*/writer.lock')), 'cancel left a writer lock'
         fcntl.ioctl(app.master, termios.TIOCSWINSZ, struct.pack('HHHH', 16, 38, 0, 0))
         os.kill(app.child.pid, signal.SIGWINCH)
-        app.expect('Esc返回')
+        app.expect('返回(q)')
+        app.send('\x03')
+        app.expect('再次退出(Ctrl+C)')
         app.send('\x03')
         app.expect('\x1b[?1049l')
         assert app.child.wait(timeout=5) == 0
@@ -185,6 +191,8 @@ process.stdin.on('end', async () => {{
         app.expect('/    首页')
         assert b'\x1b[48;2;28;25;22m' in app.buffer, '--color always did not restore the TUI palette'
         app.send('q')
+        app.expect('再次退出(q)')
+        app.send('q')
         app.expect('\x1b[?1049l')
         assert app.child.wait(timeout=5) == 0
     finally:
@@ -193,4 +201,4 @@ process.stdin.on('end', async () => {{
     invalid = subprocess.run([shutil.which('node'), str(repo / 'src/cli.mjs'), 'ui', '--color', 'invalid'], capture_output=True, text=True)
     assert invalid.returncode == 1 and '--color 必须' in invalid.stderr
 
-print('PTY acceptance passed: generation, dossier, frozen source, guarded session jump, back navigation, invalid date, cancellation, resize, Ctrl-C and terminal restoration.')
+print('PTY acceptance passed: generation, dossier, frozen source, guarded session jump, q back, confirmed q/Ctrl+C exit, invalid date, cancellation, resize and terminal restoration.')
