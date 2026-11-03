@@ -115,8 +115,7 @@ export function sourceSession(view, sourceId) {
 
 export function conversationSession(view, session) {
   if (!session || session.lineage?.origin !== 'subagent') return session;
-  // Build each provider's families separately: providers can reuse a session ID.
-  return structuredTodaySessionFamilies(view.sessions.filter(s => s.platform === session.platform))
+  return structuredTodaySessionFamilies(view.sessions)
     .find(family => family.members.includes(session))?.root;
 }
 

@@ -1,4 +1,4 @@
-import type { AgentPlatform } from "./types";
+import type { AgentPlatform, AgentWorkSession } from "./types";
 import type { EvidenceLocatorV1 } from "./structured-today-contracts";
 
 export function familyChildEvidenceId(session: { platform: AgentPlatform; id: string }): string {
@@ -21,4 +21,14 @@ export function structuredTranscriptEvidence(evidence: EvidenceLocatorV1 | undef
   } catch {
     return undefined;
   }
+}
+
+export function sessionFamilyKey(session: Pick<AgentWorkSession, "platform" | "id">): string {
+  return JSON.stringify([session.platform, session.id]);
+}
+
+export function sessionParentKey(session: { platform: AgentPlatform; lineage?: { parentSessionId?: string | undefined; parentProvider?: AgentPlatform | undefined } | undefined }): string | undefined {
+  return session.lineage?.parentSessionId
+    ? sessionFamilyKey({ platform: session.lineage.parentProvider ?? session.platform, id: session.lineage.parentSessionId })
+    : undefined;
 }

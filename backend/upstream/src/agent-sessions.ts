@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { associateWorkflowSessions, workflowSessionReceipts, type WorkflowSessionReceipt } from "./workflow-session-links";
+import { sessionFamilyKey, sessionParentKey } from "./session-family";
 import {
   DEFAULT_SESSION_PROVIDERS,
   DEFAULT_SESSION_SCAN_ROOTS,
@@ -144,6 +146,7 @@ export async function loadAgentWorkSnapshot(
   }
 
   const sessions: AgentWorkSession[] = [];
+  const workflowReceipts: WorkflowSessionReceipt[] = [];
   const seen = new Map<string, string>();
   let warnings: string[] = [];
   const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
@@ -159,8 +162,9 @@ export async function loadAgentWorkSnapshot(
 
   for (const candidate of sorted) {
     let session: AgentWorkSession | null;
+    let candidateReceipts: WorkflowSessionReceipt[] = [];
     try {
-      session = await readSession(candidate, fs, day);
+      session = await readSession(candidate, fs, day, (records, parent) => { candidateReceipts = workflowSessionReceipts(records, parent); });
     } catch (error) {
       warnings.push(`会话证据读取失败（${candidate.path}）：${errorMessage(error)}`);
       warnings = warnings.slice(0, 8);
@@ -191,6 +195,7 @@ export async function loadAgentWorkSnapshot(
     }
     seen.set(key, session.path);
     sessions.push(session);
+    workflowReceipts.push(...candidateReceipts);
     evidenceCoverage.push({
       sourceId: candidateSourceId(candidate),
       disposition: "read",
@@ -198,6 +203,7 @@ export async function loadAgentWorkSnapshot(
     });
   }
 
+  warnings.push(...associateWorkflowSessions(sessions, workflowReceipts));
   const retainedSessions = retainMainSessionFamilies(sessions, maxSessions);
   const retainedIdentities = new Set(retainedSessions.map((session) => `${session.platform}:${session.id}:${session.path}`));
   for (const session of sessions) {
@@ -239,16 +245,17 @@ function retainMainSessionFamilies(sessions: AgentWorkSession[], maxSessions: nu
   const main = sessions.filter((session) => session.lineage?.origin !== "subagent");
   const retained = main.slice(0, maxSessions);
   if (retained.length >= maxSessions) return retained;
-  const retainedRootIds = new Set(retained.map((session) => session.id));
-  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const retainedRootIds = new Set(retained.map(sessionFamilyKey));
+  const byId = new Map(sessions.map((session) => [sessionFamilyKey(session), session]));
   const children = sessions.filter((session) => {
     if (session.lineage?.origin !== "subagent") return false;
-    let parentId = session.lineage.parentSessionId;
-    const seen = new Set([session.id]);
+    let parentId = sessionParentKey(session);
+    const seen = new Set([sessionFamilyKey(session)]);
     while (parentId && !seen.has(parentId)) {
       if (retainedRootIds.has(parentId)) return true;
       seen.add(parentId);
-      parentId = byId.get(parentId)?.lineage?.parentSessionId;
+      const parent = byId.get(parentId);
+      parentId = parent && sessionParentKey(parent);
     }
     return false;
   });
@@ -506,7 +513,8 @@ async function collectCandidateFiles(
 async function readSession(
   candidate: CandidateFile,
   fs: RuntimeFileSystem,
-  day: ActivityWindow
+  day: ActivityWindow,
+  onRecords: (records: unknown[], session: AgentWorkSession) => void
 ): Promise<AgentWorkSession | null> {
   const canonicalPath = await fs.realpath(candidate.path);
   const bytes = await fs.readBytes(canonicalPath);
@@ -514,6 +522,7 @@ async function readSession(
   if (hasTargetDayActivity(content, day, candidate.platform) === false) return null;
   const session = extractWorkSessionFromText(content, canonicalPath, candidate.platform, candidate.updatedAt);
   if (session) {
+    onRecords(parseSessionText(content).records, session);
     session.transcriptCapture = {
       canonicalPath,
       sha256: createHash("sha256").update(bytes).digest("hex"),

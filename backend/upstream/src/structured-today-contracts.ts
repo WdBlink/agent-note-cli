@@ -9,11 +9,13 @@ const Provider = z.enum(["codex", "claude", "copilot", "cursor"]);
 
 export const STRUCTURED_TODAY_INDEX_SCHEMA = "today-workline-index/v1" as const;
 export const STRUCTURED_TODAY_DOSSIER_SCHEMA = "today-workline-dossier/v1" as const;
-export const STRUCTURED_TODAY_WORKFLOW_VERSION = "structured-today-workflow-v8-frozen-evidence" as const;
+export const STRUCTURED_TODAY_WORKFLOW_VERSION = "structured-today-workflow-v9-workflow-lineage" as const;
 
 export const TodaySessionLineageSchema = z.object({
   origin: z.enum(["primary", "subagent", "automation", "unknown"]),
   parentSessionId: NonEmptyString.optional(),
+  parentProvider: Provider.optional(),
+  parentToolUseId: NonEmptyString.optional(),
   agentPath: NonEmptyString.optional(),
   agentNickname: NonEmptyString.optional(),
   agentRole: NonEmptyString.optional()

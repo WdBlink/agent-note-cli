@@ -5,6 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { extractWorkSessionFromText, loadAgentWorkSnapshot, type RuntimeFileSystem } from "../src/agent-sessions";
 import { createEmptyData } from "../src/state";
+import { claudeWorkflowRecords, writeWorkflowFixture } from "./workflow-session-fixture";
+import { structuredTodaySessionFamilies, buildStructuredTodayIndexInput } from "../app/desktop/structured-today-input";
+import { loadStructuredTodayEditorialContract } from "../src/structured-today-model-functions";
 
 const fsAdapter: RuntimeFileSystem = {
   stat,
@@ -17,6 +20,80 @@ const fsAdapter: RuntimeFileSystem = {
   },
   realpath
 };
+
+test("Claude workflow launch and status receipts retain cross-provider families and evidence", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workflow-lineage-"));
+  try {
+    const fixture = await writeWorkflowFixture(root);
+    const scan = () => loadAgentWorkSnapshot(createEmptyData().settings, {
+      date: "2026-08-29", now: new Date("2026-08-30T02:00:00Z"), roots: fixture.roots, providers: ["codex", "claude"], fs: fsAdapter
+    });
+    let snapshot = await scan();
+    const child = snapshot.sessions.find(session => session.id === "worker-1")!;
+    assert.deepEqual(child.lineage, { origin: "subagent", parentSessionId: "session-1", parentProvider: "claude", parentToolUseId: "status" });
+    let families = structuredTodaySessionFamilies(snapshot.sessions);
+    const family = families.find(item => item.root.platform === "claude")!;
+    assert.deepEqual(new Set(family.members.map(session => session.id)), new Set(["session-1", "worker-1", "native-child"]));
+    assert.equal(families.find(item => item.root.id === "unrelated")?.members.length, 1);
+    const input = await buildStructuredTodayIndexInput({ logicalDate: snapshot.date, snapshot,
+      editorialContract: await loadStructuredTodayEditorialContract(), artifactId: "index", revision: 1, workflowRunId: "workflow" });
+    const parent = input.sessions.find(item => item.session.provider === "claude")!;
+    assert.deepEqual(parent.evidence.map(item => item.provider), ["claude", "codex", "codex"]);
+    const evidence = JSON.parse(parent.evidenceText);
+    const worker = evidence.members.find((item: { metadata: { sessionId: string } }) => item.metadata.sessionId === "worker-1");
+    assert.equal(worker.metadata.lineage.parentProvider, "claude");
+    assert.ok(evidence.messages.filter((message: { familySessionId: string }) => message.familySessionId === "worker-1").filter((message: { role: string }) => message.role === "user").every((message: { authorKind: string }) => message.authorKind === "agent"));
+    const workerPath = path.join(fixture.roots[1]!, "worker-1.jsonl");
+    const workerText = await readFile(workerPath, "utf8");
+    await writeFile(workerPath, workerText.replaceAll("2026-08-29T01:01:00Z", "2026-08-29T00:59:00Z"));
+    await utimes(workerPath, new Date("2026-08-29T02:00:00Z"), new Date("2026-08-29T02:00:00Z"));
+    snapshot = await scan();
+    assert.equal(snapshot.sessions.find(session => session.id === "worker-1")?.lineage?.origin, "automation", "resumed sessions do not acquire a new birth parent");
+    assert.match(snapshot.warnings.join("\n"), /可能是恢复的旧会话/);
+    await fixture.write(fixture.parentPath, claudeWorkflowRecords().map(record => JSON.parse(JSON.stringify(record).replace('2026-08-29T01:01:00Z', '2026-08-29T01:05:00Z'))));
+    await writeFile(workerPath, workerText);
+    await utimes(workerPath, new Date("2026-08-29T02:00:00Z"), new Date("2026-08-29T02:00:00Z"));
+    snapshot = await scan();
+    assert.equal(snapshot.sessions.find(session => session.id === "worker-1")?.lineage?.origin, "automation", "a step resuming an earlier session cannot claim its birth");
+    await fixture.write(fixture.parentPath, claudeWorkflowRecords());
+    await writeFile(workerPath, workerText);
+    await utimes(workerPath, new Date("2026-08-29T02:00:00Z"), new Date("2026-08-29T02:00:00Z"));
+    await fixture.write(fixture.parentPath, claudeWorkflowRecords("session-1", false));
+    snapshot = await scan();
+    assert.equal(snapshot.sessions.find(session => session.id === "worker-1")?.lineage?.origin, "automation", "status inspection alone is not a launch");
+    for (const alter of [
+      (source: string) => source.replaceAll('"name":"Bash"', '"name":"Read"'),
+      (source: string) => source.replaceAll('"type":"tool_result"', '"is_error":true,"type":"tool_result"'),
+      (source: string) => source.replace("status run-1", "status unrelated-run"),
+      (source: string) => source.replace("run /tmp/plan.js", "list")
+    ]) {
+      const records = claudeWorkflowRecords().map(record => JSON.parse(alter(JSON.stringify(record))));
+      await fixture.write(fixture.parentPath, records);
+      snapshot = await scan();
+      assert.equal(snapshot.sessions.find(session => session.id === "worker-1")?.lineage?.origin, "automation");
+    }
+    await fixture.write(fixture.parentPath, claudeWorkflowRecords());
+    await fixture.write(path.join(fixture.roots[0]!, "other.jsonl"), claudeWorkflowRecords("other-parent"));
+    snapshot = await scan();
+    assert.equal(snapshot.sessions.find(session => session.id === "worker-1")?.lineage?.origin, "automation");
+    assert.match(snapshot.warnings.join("\n"), /关联未确定/);
+    await fixture.write(path.join(fixture.roots[1]!, "worker-1.jsonl"), []);
+    snapshot = await scan();
+    assert.match(snapshot.warnings.join("\n"), /子来源未纳入/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("family identity includes provider for both roots and parent edges", () => {
+  const base = { title: "同名 ID", summary: "同名 ID", path: "/tmp/session", updatedAt: "2026-08-29T01:00:00Z", artifacts: [], status: "unknown" as const };
+  const families = structuredTodaySessionFamilies([
+    { ...base, platform: "claude", id: "same", lineage: { origin: "primary" } },
+    { ...base, platform: "codex", id: "same", lineage: { origin: "primary" } },
+    { ...base, platform: "codex", id: "child", lineage: { origin: "subagent", parentSessionId: "same", parentProvider: "claude" } }
+  ]);
+  assert.equal(families.length, 2);
+  assert.deepEqual(families.find(item => item.root.platform === "claude")?.members.map(item => item.id), ["child", "same"]);
+  assert.deepEqual(families.find(item => item.root.platform === "codex")?.members.map(item => item.id), ["same"]);
+});
 
 test("JSON event metadata never becomes a title, and middle/event-only messages remain discoverable", () => {
   const metadata = { timestamp: "2026-09-07T00:00:32.135Z", type: "session_meta", payload: { id: "session-1", cwd: "/tmp/project" } };
@@ -94,7 +171,7 @@ test("Copilot discovers shallow history before applying the file cap and still r
     const options = { date, now: new Date("2026-09-09T12:00:00"), homeDir: dir, providers: ["copilot"] as const, fs };
     const snapshot = await loadAgentWorkSnapshot(createEmptyData().settings, { ...options, providers: [...options.providers] });
     assert.deepEqual(snapshot.sessions.map(session => session.id), [targetId]);
-    assert.deepEqual(visited, [root], "session workspaces are never traversed");
+    assert.deepEqual(visited.map(value => path.resolve(value)), [path.resolve(root)], "session workspaces are never traversed");
     assert.ok(snapshot.evidenceCoverage?.some(entry => entry.disposition === "truncated"), "the global file cap remains visible");
     const limited = await loadAgentWorkSnapshot(createEmptyData().settings, { ...options, providers: [...options.providers], maxEntries: 1 });
     assert.ok(limited.evidenceCoverage?.some(entry => entry.disposition === "truncated"), "root enumeration remains bounded");
@@ -610,7 +687,7 @@ test("recognizes a Git worktree without replacing its canonical cwd", async () =
     });
     assert.equal(snapshot.sessions[0]?.projectPath, worktree);
     assert.equal(snapshot.sessions[0]?.worktreePath, worktree);
-    assert.equal(snapshot.sessions[0]?.repositoryPath, mainRepo);
+    assert.equal(path.resolve(snapshot.sessions[0]!.repositoryPath!), path.resolve(mainRepo));
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
@@ -631,23 +708,23 @@ test("merges model summaries without allowing canonical paths or ids to change",
       fs: {
         ...fsAdapter,
         async readdir(target) {
-          if (target === path.join(temp, "codex")) return ["rollout.jsonl"];
+          if (path.resolve(target) === path.resolve(temp, "codex")) return ["rollout.jsonl"];
           return readdir(target);
         },
         async stat(target) {
-          if (target === path.join(temp, "codex", "rollout.jsonl")) return stat(file);
+          if (path.resolve(target) === path.resolve(temp, "codex", "rollout.jsonl")) return stat(file);
           return stat(target);
         },
         async readFile(target, encoding) {
-          if (target === path.join(temp, "codex", "rollout.jsonl")) return readFile(file, encoding);
+          if (path.resolve(target) === path.resolve(temp, "codex", "rollout.jsonl")) return readFile(file, encoding);
           return readFile(target, encoding);
         },
         async readBytes(target) {
-          if (target === path.join(temp, "codex", "rollout.jsonl") || target === await realpath(file)) return readFile(file);
+          if (path.resolve(target) === path.resolve(temp, "codex", "rollout.jsonl") || target === await realpath(file)) return readFile(file);
           return readFile(target);
         },
         async realpath(target) {
-          if (target === path.join(temp, "codex", "rollout.jsonl")) return realpath(file);
+          if (path.resolve(target) === path.resolve(temp, "codex", "rollout.jsonl")) return realpath(file);
           return realpath(target);
         }
       },
@@ -914,7 +991,7 @@ test("Cursor workspace metadata wins over tool paths and preserves dotted direct
 test("Cursor project slug resolution never substitutes a surviving parent for a missing project", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "cursor-project-"));
   try {
-    const slug = path.join(temp, "missing-project").slice(1).replace(/[/_]/g, "-");
+    const slug = path.join(temp, "missing-project").replace(/^[\\/]+/, "").replace(/[:\\/_]/g, "-");
     const root = path.join(temp, ".cursor", "projects");
     const file = path.join(root, slug, "agent-transcripts", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
     await mkdir(path.dirname(file), { recursive: true });
