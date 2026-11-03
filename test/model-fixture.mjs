@@ -1,4 +1,5 @@
 // Same synthetic model responses as the App integration test. No provider calls.
+export { writeWorkflowFixture, workflowRunner } from './workflow-fixture.mjs';
 export function structuredRunner() {
   return async (request) => {
     const evidenceId = "session:codex:session-1";

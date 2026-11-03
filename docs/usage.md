@@ -192,3 +192,11 @@ CLI 继承与 App 相同的模型进程环境和依赖；例如用户已设置�
 **`an` 与其他命令冲突**：使用 `agent-note`。若 Homebrew 链接阶段报已有文件，先检查已有命令归属；不要使用 `--overwrite` 覆盖不相关工具。
 
 **Windows**：当前发行验证覆盖 macOS 与 Linux，没有声称原生 Windows 支持。
+# Claude workflow provenance
+
+A Claude Code Bash call that launches dynamic-workflow and reads its matching JSON status or wait receipt can identify a new Codex exec Session by its exact step thread ID. The scanner groups that Session and its native descendants under the Claude parent. Each transcript retains its provider, canonical path, capture hash and byte range. Source navigation returns the parent conversation while evidence still opens the child transcript.
+
+The adapter recognizes literal `codex-workflow` commands and installed `dynamic-workflow/.../bin/workflow.mjs` commands with `--json`. It requires the launch and matching version-1 status receipt in the same captured Claude transcript. Shell variable indirection, state-file inspection, launch-only output, missing transcripts, ambiguous parents and resumed sessions without new-session time evidence do not establish a parent. Those sources remain independent or carry a coverage warning. No extra transcript roots or workflow state stores are read.
+
+Use `--source all` to scan enabled sources together, or retain a narrower source selection. Source reading and the analysis compiler remain separate choices. For example, `--compiler codex` can analyze Claude and Codex evidence without using Claude as the analysis CLI.
+

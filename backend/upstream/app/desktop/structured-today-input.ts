@@ -21,7 +21,7 @@ import {
 } from "../../src/structured-today-v2-workflow";
 import { buildStructuredTodayProvenanceSession } from "./structured-today-provenance-input";
 import { sessionUserAuthorKind } from "./session-authority";
-import { familyChildEvidenceId } from "../../src/session-family";
+import { familyChildEvidenceId, sessionFamilyKey, sessionParentKey } from "../../src/session-family";
 
 const MAX_MODEL_EVIDENCE_CHARACTERS = 240_000;
 
@@ -77,7 +77,7 @@ export async function buildStructuredTodayIndexInput(
     };
     const evidence = [
       rootEvidence,
-      ...family.members.filter((member) => member.id !== session.id).map((member) => {
+      ...family.members.filter((member) => sessionFamilyKey(member) !== sessionFamilyKey(session)).map((member) => {
         const memberCapture = member.transcriptCapture;
         return {
           evidenceId: familyChildEvidenceId(member),
@@ -123,7 +123,7 @@ export async function buildStructuredTodayIndexInput(
         const memberCapture = member.transcriptCapture;
         if (!memberCapture || memberCapture.canonicalPath !== member.path) {
           return {
-            relation: member.id === session.id ? "primary" : "child-agent",
+            relation: sessionFamilyKey(member) === sessionFamilyKey(session) ? "primary" : "child-agent",
             metadata: sessionMetadata(member),
             coverage: "unavailable",
             warning: "Scanner did not provide one exact complete transcript capture.",
@@ -146,7 +146,7 @@ export async function buildStructuredTodayIndexInput(
             userAuthorKind: sessionUserAuthorKind(member)
           });
           return {
-            relation: member.id === session.id ? "primary" : "child-agent",
+            relation: sessionFamilyKey(member) === sessionFamilyKey(session) ? "primary" : "child-agent",
             metadata: sessionMetadata(member),
             coverage: parsed.truncated || parsed.warning ? "partial" : "complete",
             warning: parsed.warning ?? null,
@@ -154,7 +154,7 @@ export async function buildStructuredTodayIndexInput(
             messages: parsed.messages
           };
         } catch (error) {
-          if (member.id === session.id) throw error;
+          if (sessionFamilyKey(member) === sessionFamilyKey(session)) throw error;
           return {
             relation: "child-agent",
             metadata: sessionMetadata(member),
@@ -176,7 +176,7 @@ export async function buildStructuredTodayIndexInput(
           metadata: sessionMetadata(session),
           family: {
             primarySessionId: session.id,
-            childSessionIds: family.members.filter((member) => member.id !== session.id).map((member) => member.id)
+            childSessionIds: family.members.filter((member) => sessionFamilyKey(member) !== sessionFamilyKey(session)).map((member) => member.id)
           },
           members: familyEvidence.map(({ messages: _messages, ...member }) => member),
           messages: familyEvidence.flatMap((member) => member.messages.map((message) => ({
@@ -376,25 +376,25 @@ export function structuredTodaySessionFamilies(
   inputSessions: AgentWorkSession[]
 ): StructuredTodaySessionFamily[] {
   const sessions = inputSessions.filter(isSupportedSession);
-  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const byId = new Map(sessions.map((session) => [sessionFamilyKey(session), session]));
   const roots = sessions.filter((session) => session.lineage?.origin !== "subagent");
-  const familyByRoot = new Map(roots.map((root) => [root.id, { root, members: [root] }]));
+  const familyByRoot = new Map(roots.map((root) => [sessionFamilyKey(root), { root, members: [root] }]));
   for (const child of sessions.filter((session) => session.lineage?.origin === "subagent")) {
-    let parentId = child.lineage?.parentSessionId;
-    const seen = new Set([child.id]);
+    let parentId = sessionParentKey(child);
+    const seen = new Set([sessionFamilyKey(child)]);
     while (parentId && !seen.has(parentId)) {
       seen.add(parentId);
       const parent = byId.get(parentId);
       if (!parent) break;
       if (parent.lineage?.origin !== "subagent") {
-        familyByRoot.get(parent.id)?.members.push(child);
+        familyByRoot.get(sessionFamilyKey(parent))?.members.push(child);
         parentId = undefined;
         break;
       }
-      parentId = parent.lineage.parentSessionId;
+      parentId = sessionParentKey(parent);
     }
   }
-  return roots.map((root) => familyByRoot.get(root.id)!).map((family) => ({
+  return roots.map((root) => familyByRoot.get(sessionFamilyKey(root))!).map((family) => ({
     ...family,
     members: family.members.sort((left, right) =>
       (left.startedAt ?? left.updatedAt).localeCompare(right.startedAt ?? right.updatedAt) || left.id.localeCompare(right.id)

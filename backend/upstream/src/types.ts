@@ -69,6 +69,8 @@ export type AgentSessionOrigin = "primary" | "subagent" | "automation" | "unknow
 export interface AgentSessionLineage {
   origin: AgentSessionOrigin;
   parentSessionId?: string;
+  parentProvider?: SessionProvider;
+  parentToolUseId?: string;
   agentPath?: string;
   agentNickname?: string;
   agentRole?: string;
