@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/WdBlink/agent-notebook",
-  "commit": "fefc7f1f0f1a38c0f0225eb2d6415c1644304990",
+  "commit": "6d6564865271b3ab54d2d9c1945d3b028534d8c2",
   "source": "working-tree",
   "files": {
     "LICENSE": "24f266210ee5aae6ef6b6f5f0156139347a0c850f4e7e5f546ef3004e5149e42",
@@ -50,7 +50,7 @@
     "src/workflow-session-links.ts": "d92986117f1f5f833229ab067613a98749d0363d30349ce85c0c731bf4609176",
     "src/workline-review.ts": "366952863d2816cc2c0852381d46432511e5f1597039a5546367e470800e3939",
     "src/workline-transport-recovery.ts": "bdcd4903ad6bc86699114dfd002df8ca74639388e512f69962379b2836f93445",
-    "tests/agent-sessions.test.ts": "5f0b13c7d52e4fe91d25d4267517cb524a0ee496790dbe2b4bced21397cf5da5",
+    "tests/agent-sessions.test.ts": "0b6f379770354b18a7715f4cc80cbe66b8282414dbf661f7617a9f01f9b48728",
     "tests/structured-today-integration.test.ts": "089243183c7f47d68960ab77064e9f39be0945e42711bef492b69bc94db7a7a9",
     "tests/structured-today-provider-schema.test.ts": "302778e64f6d9b6f253aee3042905bf2d6f32e3392d9d3956f73d9114e51da70",
     "tests/structured-today-workflow.test.ts": "cf76f9258a15b1d0575df2d021773f1c3dd572db7a18d3b5e22d44e157b3b907",

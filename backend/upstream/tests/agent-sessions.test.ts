@@ -171,7 +171,7 @@ test("Copilot discovers shallow history before applying the file cap and still r
     const options = { date, now: new Date("2026-09-09T12:00:00"), homeDir: dir, providers: ["copilot"] as const, fs };
     const snapshot = await loadAgentWorkSnapshot(createEmptyData().settings, { ...options, providers: [...options.providers] });
     assert.deepEqual(snapshot.sessions.map(session => session.id), [targetId]);
-    assert.deepEqual(visited, [root], "session workspaces are never traversed");
+    assert.deepEqual(visited.map(value => path.resolve(value)), [path.resolve(root)], "session workspaces are never traversed");
     assert.ok(snapshot.evidenceCoverage?.some(entry => entry.disposition === "truncated"), "the global file cap remains visible");
     const limited = await loadAgentWorkSnapshot(createEmptyData().settings, { ...options, providers: [...options.providers], maxEntries: 1 });
     assert.ok(limited.evidenceCoverage?.some(entry => entry.disposition === "truncated"), "root enumeration remains bounded");
@@ -687,7 +687,7 @@ test("recognizes a Git worktree without replacing its canonical cwd", async () =
     });
     assert.equal(snapshot.sessions[0]?.projectPath, worktree);
     assert.equal(snapshot.sessions[0]?.worktreePath, worktree);
-    assert.equal(snapshot.sessions[0]?.repositoryPath, mainRepo);
+    assert.equal(path.resolve(snapshot.sessions[0]!.repositoryPath!), path.resolve(mainRepo));
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
@@ -708,23 +708,23 @@ test("merges model summaries without allowing canonical paths or ids to change",
       fs: {
         ...fsAdapter,
         async readdir(target) {
-          if (target === path.join(temp, "codex")) return ["rollout.jsonl"];
+          if (path.resolve(target) === path.resolve(temp, "codex")) return ["rollout.jsonl"];
           return readdir(target);
         },
         async stat(target) {
-          if (target === path.join(temp, "codex", "rollout.jsonl")) return stat(file);
+          if (path.resolve(target) === path.resolve(temp, "codex", "rollout.jsonl")) return stat(file);
           return stat(target);
         },
         async readFile(target, encoding) {
-          if (target === path.join(temp, "codex", "rollout.jsonl")) return readFile(file, encoding);
+          if (path.resolve(target) === path.resolve(temp, "codex", "rollout.jsonl")) return readFile(file, encoding);
           return readFile(target, encoding);
         },
         async readBytes(target) {
-          if (target === path.join(temp, "codex", "rollout.jsonl") || target === await realpath(file)) return readFile(file);
+          if (path.resolve(target) === path.resolve(temp, "codex", "rollout.jsonl") || target === await realpath(file)) return readFile(file);
           return readFile(target);
         },
         async realpath(target) {
-          if (target === path.join(temp, "codex", "rollout.jsonl")) return realpath(file);
+          if (path.resolve(target) === path.resolve(temp, "codex", "rollout.jsonl")) return realpath(file);
           return realpath(target);
         }
       },
@@ -991,7 +991,7 @@ test("Cursor workspace metadata wins over tool paths and preserves dotted direct
 test("Cursor project slug resolution never substitutes a surviving parent for a missing project", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "cursor-project-"));
   try {
-    const slug = path.join(temp, "missing-project").slice(1).replace(/[/_]/g, "-");
+    const slug = path.join(temp, "missing-project").replace(/^[\\/]+/, "").replace(/[:\\/_]/g, "-");
     const root = path.join(temp, ".cursor", "projects");
     const file = path.join(root, slug, "agent-transcripts", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
     await mkdir(path.dirname(file), { recursive: true });
